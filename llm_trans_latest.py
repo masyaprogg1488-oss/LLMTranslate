@@ -81,9 +81,22 @@ THEME = {
 LM_HOST, LM_PORT = "127.0.0.1", 1234
 LOADED_PREFIX = "✓ "
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
-ICONS_DIR = os.path.join(BASE_DIR, "icons")
+if IS_WIN:
+    if getattr(sys, "frozen", False):
+        BASE_DIR = os.path.dirname(os.path.abspath(sys.executable))
+    else:
+        BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
+    ICONS_DIR = os.path.join(BASE_DIR, "icons")
+else:
+    APP_CONFIG_DIR = os.path.expanduser("~/.config/llm-translate")
+    APP_CACHE_DIR = os.path.expanduser("~/.cache/llm-translate")
+    os.makedirs(APP_CONFIG_DIR, exist_ok=True)
+    os.makedirs(APP_CACHE_DIR, exist_ok=True)
+
+    BASE_DIR = APP_CONFIG_DIR
+    CONFIG_PATH = os.path.join(APP_CONFIG_DIR, "config.json")
+    ICONS_DIR = os.path.join(APP_CACHE_DIR, "icons")
 
 UI_STRINGS = {
     "ru": {
