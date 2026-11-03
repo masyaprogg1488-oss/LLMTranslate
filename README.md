@@ -15,7 +15,7 @@
 <br/>
 
 <p align="center">
-  <img src="assets/preview.png" alt="LLM Translate Interface" width="900" style="border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.5);"/>
+  <img src="preview.png" alt="LLM Translate Interface" width="900" style="border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.5);"/>
 </p>
 
 </div>
@@ -39,7 +39,8 @@
 1. Скачайте архив с файлом `LLM_Translate.exe` из раздела **[Releases](../../releases)**.
 2. Убедитесь, что запущен **LM Studio** с включённым сервером на порту `1234` (или просто нажмите кнопку **«Сервер»** внутри переводчика).
 3. Запустите `LLM_Translate.exe`. Приложение готово к переводу без установки Python и зависимостей!
-   ( Рекомендую использовать gemma-2-9b-it-abliterated-Q5_K_M, самая стабильная ~8ГБ модель )
+
+( Рекомендую использовать gemma-2-9b-it-abliterated-Q5_K_M, самая стабильная ~8ГБ модель )
 
 ---
 
@@ -101,6 +102,7 @@
 * **ОС:** Windows 10/11, Linux (X11 / Wayland)
 * **LM Studio:** актуальная версия с настроенным локальным сервером на порт 1234(+ Нужен lm studio в PATH для автоматизации).
 * *(Для сборки из исходников)*: Python 3.8+
+* **Первый запуск с ВПН!!**(необязательно)
 
 ---
 
