@@ -5,8 +5,11 @@ import sys
 import os
 import glob
 import time
+import base64
 import ctypes
+import tempfile
 import urllib.request
+import urllib.parse
 import subprocess
 import threading
 import difflib
@@ -17,18 +20,18 @@ import tkinter as tk
 import tkinter.font as tkfont
 
 try:
-    import pyperclip  
+    import pyperclip
 except ImportError:
     pyperclip = None
 
 try:
-    from PIL import Image, ImageDraw  
+    from PIL import Image, ImageDraw, ImageTk
     HAS_PIL = True
 except ImportError:
     HAS_PIL = False
 
-import customtkinter as ctk  
-from openai import OpenAI  
+import customtkinter as ctk
+from openai import OpenAI
 
 IS_WIN = sys.platform == "win32"
 IS_MAC = sys.platform == "darwin"
@@ -48,7 +51,7 @@ if IS_WIN:
     except Exception:
         pass
     try:
-        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("llm.translate.app.v11")
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("llm.translate.app.v13")
     except Exception:
         pass
 
@@ -81,11 +84,13 @@ THEME = {
 LM_HOST, LM_PORT = "127.0.0.1", 1234
 LOADED_PREFIX = "✓ "
 
+if getattr(sys, "frozen", False):
+    SCRIPT_DIR = os.path.dirname(os.path.abspath(sys.executable))
+else:
+    SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
 if IS_WIN:
-    if getattr(sys, "frozen", False):
-        BASE_DIR = os.path.dirname(os.path.abspath(sys.executable))
-    else:
-        BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    BASE_DIR = SCRIPT_DIR
     CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
     ICONS_DIR = os.path.join(BASE_DIR, "icons")
 else:
@@ -93,17 +98,28 @@ else:
     APP_CACHE_DIR = os.path.expanduser("~/.cache/llm-translate")
     os.makedirs(APP_CONFIG_DIR, exist_ok=True)
     os.makedirs(APP_CACHE_DIR, exist_ok=True)
-
     BASE_DIR = APP_CONFIG_DIR
     CONFIG_PATH = os.path.join(APP_CONFIG_DIR, "config.json")
     ICONS_DIR = os.path.join(APP_CACHE_DIR, "icons")
 
+FLAGS_DIR = os.path.join(ICONS_DIR, "flags")
+
 UI_STRINGS = {
     "ru": {
+        "tip_swap": "Поменять языки местами",
+        "tip_tts": "Озвучить перевод",
+        "tip_go": "Перевести (Ctrl+Enter)",
+        "tip_stop": "Остановить перевод",
+        "tip_auto_chk": "Авто. перевод при вводе текста",
+        "tip_refresh": "Обновить список моделей LM Studio",
+        "tip_server": "Запустить сервер LM Studio",
+        "tip_load_model": "Загрузить модель",
+        "tip_vram": "Очистить VRAM",
+        "tip_settings": "Настройки",
         "splash_sub": "Локальный нейросетевой переводчик",
         "splash_init": "Инициализация...",
         "splash_env": "Подготовка графической среды...",
-        "splash_tex": "Создание текстур интерфейса...",
+        "splash_tex": "Генерация встроенных ассетов...",
         "splash_ui": "Сборка главного окна...",
         "splash_cfg": "Чтение конфигурации config.json...",
         "splash_start": "Запуск приложения...",
@@ -114,8 +130,11 @@ UI_STRINGS = {
         "no_models": "Нет моделей в LM Studio",
         "offline_model": "LM Studio офлайн",
         "loading": "Загрузка...",
-        "paste": "Вставить",
-        "copy": "Копия",
+        "auto_trans_chk": "Автоперевод",
+        "smart_search_sw": "Умный поиск",
+        "settings_title": "Настройки приложения",
+        "settings_pin": "Поверх всех окон",
+        "settings_lang": "Язык программы",
         "server_btn": "Сервер",
         "instant_btn": "⚡ Ответить сразу",
         "connecting": "Подключение...",
@@ -125,6 +144,9 @@ UI_STRINGS = {
         "copied": "✓ Скопировано",
         "copied_sel": "✓ Скопировано выделенное",
         "stopped": "⏹ Остановлено",
+        "tts_speaking": "🔊 Озвучивание...",
+        "tts_stopped": "⏹ Озвучка остановлена",
+        "tts_empty": "Нет текста для озвучки",
         "model_reset": "Модель сброшена",
         "model_ready": "● Модель готова",
         "searching_lms": "Поиск LM Studio",
@@ -135,6 +157,7 @@ UI_STRINGS = {
         "vram_check": "Проверка и очистка VRAM",
         "vram_cleaned_all": "✓ VRAM полностью очищена",
         "vram_cleaned": "✓ VRAM очищена",
+        "vram_already_empty": "✓ VRAM уже пуста",
         "vram_exit": "Очистка VRAM перед выходом...",
         "unloading": "Выгрузка",
         "loading_vram": "Загрузка в VRAM",
@@ -146,8 +169,8 @@ UI_STRINGS = {
         "conn_err": "✕ Ошибка связи",
         "api_err": "Ошибка API",
         "dict_variants": "варианты перевода и идиомы:",
-        "custom_lang_hint": "  Нажмите Enter для своего языка",
-        "no_matches": "  Нет совпадений",
+        "custom_lang_hint": "Нажмите Enter для своего языка",
+        "no_matches": "Нет совпадений",
         "ctx_paste_cur": "Вставить в курсор (Ctrl+V)",
         "ctx_paste_rep": "Вставить с заменой",
         "ctx_copy": "Копировать (Ctrl+C)",
@@ -165,10 +188,20 @@ UI_STRINGS = {
         "mismatch_status": "⚠ Это {det}, а не {src}!"
     },
     "en": {
+        "tip_swap": "Swap languages",
+        "tip_tts": "Listen to translation",
+        "tip_go": "Translate (Ctrl+Enter)",
+        "tip_stop": "Stop translation",
+        "tip_auto_chk": "Auto-translate while typing",
+        "tip_refresh": "Refresh LM Studio models",
+        "tip_server": "Start LM Studio server",
+        "tip_load_model": "Load model",
+        "tip_vram": "Clear VRAM",
+        "tip_settings": "Settings",
         "splash_sub": "Local Neural Machine Translator",
         "splash_init": "Initializing...",
         "splash_env": "Preparing graphics environment...",
-        "splash_tex": "Building UI textures...",
+        "splash_tex": "Building embedded UI assets...",
         "splash_ui": "Assembling main window...",
         "splash_cfg": "Reading config.json...",
         "splash_start": "Launching application...",
@@ -179,8 +212,11 @@ UI_STRINGS = {
         "no_models": "No models in LM Studio",
         "offline_model": "LM Studio Offline",
         "loading": "Loading...",
-        "paste": "Paste",
-        "copy": "Copy",
+        "auto_trans_chk": "Auto-translate",
+        "smart_search_sw": "Smart Search",
+        "settings_title": "Application Settings",
+        "settings_pin": "Always on top",
+        "settings_lang": "App Language",
         "server_btn": "Server",
         "instant_btn": "⚡ Instant Answer",
         "connecting": "Connecting...",
@@ -190,6 +226,9 @@ UI_STRINGS = {
         "copied": "✓ Copied",
         "copied_sel": "✓ Selection copied",
         "stopped": "⏹ Stopped",
+        "tts_speaking": "🔊 Speaking...",
+        "tts_stopped": "⏹ Speech stopped",
+        "tts_empty": "No translation to speak",
         "model_reset": "Model reset",
         "model_ready": "● Model ready",
         "searching_lms": "Searching LM Studio",
@@ -200,6 +239,7 @@ UI_STRINGS = {
         "vram_check": "Checking & clearing VRAM",
         "vram_cleaned_all": "✓ VRAM completely cleared",
         "vram_cleaned": "✓ VRAM cleared",
+        "vram_already_empty": "✓ VRAM already empty",
         "vram_exit": "Clearing VRAM before exit...",
         "unloading": "Unloading",
         "loading_vram": "Loading into VRAM",
@@ -211,8 +251,8 @@ UI_STRINGS = {
         "conn_err": "✕ Connection error",
         "api_err": "API Error",
         "dict_variants": "translations & idioms:",
-        "custom_lang_hint": "  Press Enter for custom language",
-        "no_matches": "  No matches",
+        "custom_lang_hint": "Press Enter for custom language",
+        "no_matches": "No matches",
         "ctx_paste_cur": "Paste at cursor (Ctrl+V)",
         "ctx_paste_rep": "Paste & replace all",
         "ctx_copy": "Copy (Ctrl+C)",
@@ -237,6 +277,66 @@ ALL_MODEL_PLACEHOLDERS = {
     UI_STRINGS["ru"]["no_models"], UI_STRINGS["en"]["no_models"],
     UI_STRINGS["ru"]["offline_model"], UI_STRINGS["en"]["offline_model"],
     UI_STRINGS["ru"]["loading"], UI_STRINGS["en"]["loading"]
+}
+
+LANG_ISO_MAP = {
+    "Auto Detect": "globe", "Russian": "ru", "English": "gb", "German": "de",
+    "French": "fr", "Spanish": "es", "Italian": "it", "Portuguese": "pt",
+    "Chinese (Simplified)": "cn", "Chinese (Traditional)": "tw", "Japanese": "jp",
+    "Korean": "kr", "Ukrainian": "ua", "Belarusian": "by", "Kazakh": "kz",
+    "Uzbek": "uz", "Kyrgyz": "kg", "Tajik": "tj", "Turkmen": "tm",
+    "Azerbaijani": "az", "Armenian": "am", "Georgian": "ge", "Turkish": "tr",
+    "Arabic": "sa", "Hebrew": "il", "Persian": "ir", "Hindi": "in",
+    "Bengali": "bd", "Urdu": "pk", "Punjabi": "in", "Tamil": "in",
+    "Telugu": "in", "Marathi": "in", "Gujarati": "in", "Kannada": "in",
+    "Malayalam": "in", "Sinhala": "lk", "Nepali": "np", "Thai": "th",
+    "Vietnamese": "vn", "Indonesian": "id", "Malay": "my", "Tagalog": "ph",
+    "Burmese": "mm", "Khmer": "kh", "Lao": "la", "Mongolian": "mn",
+    "Polish": "pl", "Czech": "cz", "Slovak": "sk", "Hungarian": "hu",
+    "Romanian": "ro", "Bulgarian": "bg", "Serbian": "rs", "Croatian": "hr",
+    "Bosnian": "ba", "Slovenian": "si", "Macedonian": "mk", "Albanian": "al",
+    "Greek": "gr", "Lithuanian": "lt", "Latvian": "lv", "Estonian": "ee",
+    "Dutch": "nl", "Swedish": "se", "Norwegian": "no", "Danish": "dk",
+    "Finnish": "fi", "Icelandic": "is", "Irish": "ie", "Welsh": "gb-wls",
+    "Scottish Gaelic": "gb-sct", "Basque": "es", "Catalan": "es",
+    "Galician": "es", "Maltese": "mt", "Luxembourgish": "lu", "Afrikaans": "za",
+    "Swahili": "ke", "Amharic": "et", "Yoruba": "ng", "Igbo": "ng",
+    "Hausa": "ng", "Zulu": "za", "Xhosa": "za", "Somali": "so",
+    "Malagasy": "mg", "Kurdish": "iq", "Pashto": "af", "Tatar": "ru",
+    "Bashkir": "ru", "Chuvash": "ru", "Chechen": "ru", "Ossetian": "ru",
+    "Yakut": "ru", "Buryat": "ru", "Udmurt": "ru", "Komi": "ru",
+    "Mari": "ru", "Mordvin": "ru", "Yiddish": "il", "Latin": "va",
+    "Ancient Greek": "gr", "Old Church Slavonic": "ru", "Sanskrit": "in",
+    "Esperanto": "globe", "Interlingua": "globe", "Toki Pona": "globe",
+    "Maori": "nz", "Hawaiian": "us", "Samoan": "ws", "Cebuano": "ph",
+    "Javanese": "id", "Sundanese": "id", "Haitian Creole": "ht",
+    "Guarani": "py", "Quechua": "pe",
+}
+
+TTS_LANG_CODE_MAP = {
+    "Russian": "ru", "English": "en", "German": "de", "French": "fr",
+    "Spanish": "es", "Italian": "it", "Portuguese": "pt",
+    "Chinese (Simplified)": "zh-CN", "Chinese (Traditional)": "zh-TW",
+    "Japanese": "ja", "Korean": "ko", "Ukrainian": "uk", "Belarusian": "be",
+    "Kazakh": "kk", "Uzbek": "uz", "Turkish": "tr", "Arabic": "ar",
+    "Hebrew": "iw", "Persian": "fa", "Hindi": "hi", "Bengali": "bn",
+    "Urdu": "ur", "Tamil": "ta", "Telugu": "te", "Thai": "th",
+    "Vietnamese": "vi", "Indonesian": "id", "Malay": "ms", "Tagalog": "tl",
+    "Polish": "pl", "Czech": "cs", "Slovak": "sk", "Hungarian": "hu",
+    "Romanian": "ro", "Bulgarian": "bg", "Serbian": "sr", "Croatian": "hr",
+    "Greek": "el", "Lithuanian": "lt", "Latvian": "lv", "Estonian": "et",
+    "Dutch": "nl", "Swedish": "sv", "Norwegian": "no", "Danish": "da",
+    "Finnish": "fi", "Icelandic": "is", "Catalan": "ca", "Afrikaans": "af",
+    "Swahili": "sw", "Latin": "la", "Esperanto": "eo",
+}
+
+TTS_BCP47_MAP = {
+    "Russian": "ru-RU", "English": "en-US", "German": "de-DE", "French": "fr-FR",
+    "Spanish": "es-ES", "Italian": "it-IT", "Portuguese": "pt-PT",
+    "Chinese (Simplified)": "zh-CN", "Chinese (Traditional)": "zh-TW",
+    "Japanese": "ja-JP", "Korean": "ko-KR", "Ukrainian": "uk-UA",
+    "Polish": "pl-PL", "Turkish": "tr-TR", "Arabic": "ar-SA", "Hindi": "hi-IN",
+    "Dutch": "nl-NL", "Swedish": "sv-SE", "Czech": "cs-CZ", "Greek": "el-GR",
 }
 
 LANG_DATA = {
@@ -358,6 +458,17 @@ LANG_DATA = {
     "Guarani": ("Гуарани", "gn гуарани"),
     "Quechua": ("Кечуа", "qu кечуа"),
 }
+
+RE_LEADING_FLAG_OR_ISO = re.compile(
+    r"^(?:[\U0001F1E6-\U0001F1FF]{2}|[\U0001F300-\U0001FAFF\u2600-\u27BF]+|[A-Z]{2}\s+(?=[A-ZА-ЯЁ]))\s*"
+)
+
+
+def strip_flag_prefix(val):
+    if not val:
+        return ""
+    return RE_LEADING_FLAG_OR_ISO.sub("", val.strip()).strip()
+
 
 LANG_EN_TO_RU = {en: data[0] for en, data in LANG_DATA.items()}
 LANG_RU_TO_EN = {data[0].lower(): en for en, data in LANG_DATA.items()}
@@ -508,26 +619,359 @@ PHONETIC_RU_TO_EN = {
     "айя": "aya", "ая": "aya", "евро": "euro", "вихрь": "vikhr"
 }
 
-ICON_URLS = {
-    "swap": "https://img.icons8.com/fluency-systems-filled/96/ffffff/sorting-arrows-horizontal.png",
-    "clear": "https://img.icons8.com/fluency-systems-filled/96/ffffff/broom.png",
-    "play": "https://img.icons8.com/fluency-systems-filled/96/ffffff/forward.png",
-    "stop": "https://img.icons8.com/fluency-systems-filled/96/ffffff/stop.png",
-    "paste": "https://img.icons8.com/fluency-systems-filled/96/ffffff/paste.png",
-    "copy": "https://img.icons8.com/fluency-systems-filled/96/ffffff/copy.png",
-    "refresh": "https://img.icons8.com/fluency-systems-filled/96/ffffff/available-updates.png",
-    "vram": "https://img.icons8.com/fluency-systems-filled/96/ffffff/memory-slot.png",
-    "server": "https://img.icons8.com/fluency-systems-filled/96/ffffff/server.png"
-}
-
+ICON_NAMES = ("swap", "tts_play", "tts_stop", "play", "stop", "refresh", "vram_clean", "model_load", "server", "settings")
+CDN_ICON_URLS = {}
 _FONT_CACHE = {}
 
 
+def transliterate_en_to_ru_phonetic(text):
+    t = text.lower()
+    digraphs = [
+        ("tion", "шн"), ("sion", "жн"), ("ough", "о"), ("ight", "айт"),
+        ("sh", "ш"), ("ch", "ч"), ("th", "з"), ("ph", "ф"), ("wh", "в"),
+        ("ck", "к"), ("qu", "кв"), ("oo", "у"), ("ee", "и"), ("ea", "и"),
+        ("ai", "эй"), ("ay", "эй"), ("ou", "ау"), ("ow", "оу"), ("ng", "нг"),
+    ]
+    for src, dst in digraphs:
+        t = t.replace(src, dst)
+    char_map = {
+        "a": "э", "b": "б", "c": "к", "d": "д", "e": "е", "f": "ф",
+        "g": "г", "h": "х", "i": "и", "j": "дж", "k": "к", "l": "л",
+        "m": "м", "n": "н", "o": "о", "p": "п", "q": "к", "r": "р",
+        "s": "с", "t": "т", "u": "ю", "v": "в", "w": "в", "x": "кс",
+        "y": "й", "z": "з"
+    }
+    return "".join(char_map.get(ch, ch) for ch in t)
+
+
+def get_win_short_path(path):
+    if not IS_WIN or not os.path.exists(path):
+        return path
+    try:
+        buf = ctypes.create_unicode_buffer(512)
+        if ctypes.windll.kernel32.GetShortPathNameW(path, buf, 512) > 0:
+            return buf.value
+    except Exception:
+        pass
+    return path
+
+
+def resource_path(relative_path):
+    """Ищет ресурс внутри PyInstaller _MEIPASS, затем в папке скрипта, затем в конфиге/кэше."""
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        cand = os.path.join(meipass, relative_path)
+        if os.path.exists(cand):
+            return cand
+    cand_script = os.path.join(SCRIPT_DIR, relative_path)
+    if os.path.exists(cand_script):
+        return cand_script
+    return os.path.join(BASE_DIR, relative_path)
+
+
+def _draw_procedural_flag(iso_code, w=40, h=28):
+    """Генерирует иконку флага прямо в памяти (RAM) — не требует внешних файлов или сети."""
+    if not HAS_PIL:
+        return None
+    img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+
+    if iso_code == "globe":
+        d.rounded_rectangle([0, 0, w - 1, h - 1], radius=4, fill="#1e3a8a", outline="#3b82f6", width=1)
+        cx, cy, r = w // 2, h // 2, min(w, h) // 2 - 4
+        d.ellipse([cx - r, cy - r, cx + r, cy + r], outline="#93c5fd", width=2)
+        d.ellipse([cx - r // 2, cy - r, cx + r // 2, cy + r], outline="#93c5fd", width=1)
+        d.line([(cx - r, cy), (cx + r, cy)], fill="#93c5fd", width=1)
+        return img
+
+    horiz_3 = {
+        "ru": ("#ffffff", "#0039a6", "#d52b1e"),
+        "de": ("#000000", "#dd0000", "#ffce00"),
+        "nl": ("#ae1c28", "#ffffff", "#21468b"),
+        "bg": ("#ffffff", "#00966e", "#d62612"),
+        "hu": ("#ce2939", "#ffffff", "#477050"),
+        "lt": ("#fdb913", "#006a44", "#c1272d"),
+        "ee": ("#0072ce", "#000000", "#ffffff"),
+        "am": ("#d90012", "#0033a0", "#f2a800"),
+        "az": ("#00b5e2", "#ef3340", "#509e2f"),
+        "rs": ("#c6363c", "#0c4076", "#ffffff"),
+        "hr": ("#ff0000", "#ffffff", "#171796"),
+        "si": ("#ffffff", "#005ce6", "#ff0000"),
+        "sk": ("#ffffff", "#0b4ea2", "#ee1c25"),
+        "lu": ("#ed2939", "#ffffff", "#00a1de"),
+    }
+    vert_3 = {
+        "fr": ("#002395", "#ffffff", "#ed2939"),
+        "it": ("#009246", "#ffffff", "#ce2b37"),
+        "ro": ("#002b7f", "#fcd116", "#ce1126"),
+        "ie": ("#169b62", "#ffffff", "#ff883e"),
+        "ng": ("#008751", "#ffffff", "#008751"),
+    }
+    horiz_2 = {
+        "ua": ("#0057b7", "#ffd700"),
+        "pl": ("#ffffff", "#dc143c"),
+        "id": ("#ff0000", "#ffffff"),
+    }
+
+    if iso_code in horiz_3:
+        c1, c2, c3 = horiz_3[iso_code]
+        d.rectangle([0, 0, w, h // 3], fill=c1)
+        d.rectangle([0, h // 3, w, (2 * h) // 3], fill=c2)
+        d.rectangle([0, (2 * h) // 3, w, h], fill=c3)
+    elif iso_code in vert_3:
+        c1, c2, c3 = vert_3[iso_code]
+        d.rectangle([0, 0, w // 3, h], fill=c1)
+        d.rectangle([w // 3, 0, (2 * w) // 3, h], fill=c2)
+        d.rectangle([(2 * w) // 3, 0, w, h], fill=c3)
+    elif iso_code in horiz_2:
+        c1, c2 = horiz_2[iso_code]
+        d.rectangle([0, 0, w, h // 2], fill=c1)
+        d.rectangle([0, h // 2, w, h], fill=c2)
+    elif iso_code in ("gb", "gb-wls", "gb-sct"):
+        d.rectangle([0, 0, w, h], fill="#012169")
+        d.line([(0, 0), (w, h)], fill="#ffffff", width=5)
+        d.line([(0, h), (w, 0)], fill="#ffffff", width=5)
+        d.line([(0, 0), (w, h)], fill="#c8102e", width=2)
+        d.line([(0, h), (w, 0)], fill="#c8102e", width=2)
+        d.rectangle([0, h // 2 - 4, w, h // 2 + 4], fill="#ffffff")
+        d.rectangle([w // 2 - 4, 0, w // 2 + 4, h], fill="#ffffff")
+        d.rectangle([0, h // 2 - 2, w, h // 2 + 2], fill="#c8102e")
+        d.rectangle([w // 2 - 2, 0, w // 2 + 2, h], fill="#c8102e")
+    elif iso_code == "us":
+        d.rectangle([0, 0, w, h], fill="#b22234")
+        for y in range(2, h, 4):
+            d.rectangle([0, y, w, y + 1], fill="#ffffff")
+        d.rectangle([0, 0, w // 2, h // 2], fill="#3c3b6e")
+    elif iso_code == "es":
+        d.rectangle([0, 0, w, h], fill="#aa151b")
+        d.rectangle([0, h // 4, w, (3 * h) // 4], fill="#f1bf00")
+    elif iso_code == "pt":
+        d.rectangle([0, 0, (2 * w) // 5, h], fill="#006600")
+        d.rectangle([(2 * w) // 5, 0, w, h], fill="#ff0000")
+        d.ellipse([(2 * w) // 5 - 4, h // 2 - 4, (2 * w) // 5 + 4, h // 2 + 4], fill="#ffcc00")
+    elif iso_code == "jp":
+        d.rectangle([0, 0, w, h], fill="#ffffff")
+        r = h // 3
+        d.ellipse([w // 2 - r, h // 2 - r, w // 2 + r, h // 2 + r], fill="#bc002d")
+    elif iso_code in ("cn", "vn"):
+        d.rectangle([0, 0, w, h], fill="#de2910")
+        d.ellipse([6, 6, 16, 16], fill="#ffde00")
+    elif iso_code == "kr":
+        d.rectangle([0, 0, w, h], fill="#ffffff")
+        r = h // 4
+        d.ellipse([w // 2 - r, h // 2 - r, w // 2 + r, h // 2 + r], fill="#cd2e3a")
+    elif iso_code == "by":
+        d.rectangle([0, 0, w, (2 * h) // 3], fill="#c8313e")
+        d.rectangle([0, (2 * h) // 3, w, h], fill="#4aa657")
+        d.rectangle([0, 0, 5, h], fill="#ffffff")
+    elif iso_code == "kz":
+        d.rectangle([0, 0, w, h], fill="#00afca")
+        r = h // 4
+        d.ellipse([w // 2 - r, h // 2 - r, w // 2 + r, h // 2 + r], fill="#fec50c")
+    elif iso_code == "tr":
+        d.rectangle([0, 0, w, h], fill="#e30a17")
+        d.ellipse([w // 3 - 5, h // 2 - 6, w // 3 + 7, h // 2 + 6], fill="#ffffff")
+        d.ellipse([w // 3 - 2, h // 2 - 5, w // 3 + 8, h // 2 + 5], fill="#e30a17")
+    elif iso_code in ("se", "fi", "no", "dk", "is"):
+        colors = {
+            "se": ("#006aa7", "#fecc02"),
+            "fi": ("#ffffff", "#003580"),
+            "no": ("#ba0c2f", "#00205b"),
+            "dk": ("#c8102e", "#ffffff"),
+            "is": ("#02529c", "#dc1e35"),
+        }
+        bg_c, cr_c = colors[iso_code]
+        d.rectangle([0, 0, w, h], fill=bg_c)
+        d.rectangle([w // 3 - 2, 0, w // 3 + 3, h], fill=cr_c)
+        d.rectangle([0, h // 2 - 2, w, h // 2 + 3], fill=cr_c)
+    else:
+        palette = ["#1d4ed8", "#047857", "#b91c1c", "#7e22ce", "#0f766e", "#b45309", "#374151"]
+        col = palette[sum(ord(c) for c in iso_code) % len(palette)]
+        d.rectangle([0, 0, w, h], fill=col)
+        d.rectangle([0, h - 5, w, h], fill="#ffffff")
+
+    d.rectangle([0, 0, w - 1, h - 1], outline="#323846", width=1)
+    return img
+
+
+def _draw_fallback_icon(name, size=192):
+    """Генерирует векторную иконку кнопки прямо в памяти (RAM), если нет сети и кэша."""
+    if not HAS_PIL:
+        return None
+    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    c = (255, 255, 255, 255)
+    w = max(int(size * 0.1), 12)
+
+    if name == "swap":
+        y1 = int(size * 0.34)
+        d.line([(int(size * 0.18), y1), (int(size * 0.82), y1)], fill=c, width=w)
+        d.polygon([(int(size * 0.85), y1), (int(size * 0.62), y1 - int(size * 0.18)), (int(size * 0.62), y1 + int(size * 0.18))], fill=c)
+        y2 = int(size * 0.66)
+        d.line([(int(size * 0.18), y2), (int(size * 0.82), y2)], fill=c, width=w)
+        d.polygon([(int(size * 0.15), y2), (int(size * 0.38), y2 - int(size * 0.18)), (int(size * 0.38), y2 + int(size * 0.18))], fill=c)
+
+    elif name in ("tts_play", "tts_stop"):
+        spk = [
+            (int(size * 0.18), int(size * 0.38)),
+            (int(size * 0.34), int(size * 0.38)),
+            (int(size * 0.54), int(size * 0.20)),
+            (int(size * 0.54), int(size * 0.80)),
+            (int(size * 0.34), int(size * 0.62)),
+            (int(size * 0.18), int(size * 0.62)),
+        ]
+        d.polygon(spk, fill=c)
+        if name == "tts_play":
+            d.arc([int(size * 0.42), int(size * 0.28), int(size * 0.74), int(size * 0.72)], start=-55, end=55, fill=c, width=max(w - 4, 8))
+            d.arc([int(size * 0.34), int(size * 0.16), int(size * 0.88), int(size * 0.84)], start=-55, end=55, fill=c, width=max(w - 4, 8))
+        else:
+            d.line([(int(size * 0.62), int(size * 0.34)), (int(size * 0.86), int(size * 0.66))], fill=c, width=max(w - 2, 10))
+            d.line([(int(size * 0.86), int(size * 0.34)), (int(size * 0.62), int(size * 0.66))], fill=c, width=max(w - 2, 10))
+
+    elif name == "play":
+        pts = [(int(size * 0.40), int(size * 0.30)), (int(size * 0.70), int(size * 0.60)), (int(size * 0.40), int(size * 0.80))]
+        d.line(pts, fill=c, width=int(w * 1.35), joint="curve")
+
+    elif name == "stop":
+        d.ellipse([int(size * 0.14), int(size * 0.14), int(size * 0.86), int(size * 0.86)], outline=c, width=w)
+        d.rounded_rectangle([int(size * 0.35), int(size * 0.35), int(size * 0.65), int(size * 0.65)], radius=8, fill=c)
+
+    elif name == "refresh":
+        bbox = [int(size * 0.18), int(size * 0.18), int(size * 0.82), int(size * 0.82)]
+        d.arc(bbox, start=35, end=315, fill=c, width=w)
+        d.polygon([(int(size * 0.84), int(size * 0.18)), (int(size * 0.86), int(size * 0.46)), (int(size * 0.58), int(size * 0.38))], fill=c)
+
+    elif name == "vram_clean":
+        # Иконка веника / метлы для очистки VRAM
+        d.line([(int(size * 0.78), int(size * 0.14)), (int(size * 0.46), int(size * 0.46))], fill=c, width=max(w - 2, 12))
+        collar = [
+            (int(size * 0.36), int(size * 0.42)),
+            (int(size * 0.58), int(size * 0.64)),
+            (int(size * 0.52), int(size * 0.70)),
+            (int(size * 0.30), int(size * 0.48)),
+        ]
+        d.polygon(collar, fill=c)
+        bristles = [
+            (int(size * 0.30), int(size * 0.48)),
+            (int(size * 0.52), int(size * 0.70)),
+            (int(size * 0.34), int(size * 0.88)),
+            (int(size * 0.12), int(size * 0.66)),
+        ]
+        d.polygon(bristles, fill=c)
+        d.line([(int(size * 0.22), int(size * 0.76)), (int(size * 0.35), int(size * 0.63))], fill=(0, 0, 0, 0), width=6)
+        d.line([(int(size * 0.28), int(size * 0.82)), (int(size * 0.41), int(size * 0.69))], fill=(0, 0, 0, 0), width=6)
+
+    elif name == "model_load":
+        # Стрелка загрузки вниз в лоток
+        cx = size // 2
+        d.line([(cx, int(size * 0.15)), (cx, int(size * 0.62))], fill=c, width=w)
+        d.polygon([
+            (cx, int(size * 0.72)),
+            (int(size * 0.26), int(size * 0.46)),
+            (int(size * 0.74), int(size * 0.46))
+        ], fill=c)
+        tray_y = int(size * 0.84)
+        d.line([(int(size * 0.18), int(size * 0.66)), (int(size * 0.18), tray_y)], fill=c, width=max(w - 2, 10))
+        d.line([(int(size * 0.18), tray_y), (int(size * 0.82), tray_y)], fill=c, width=max(w - 2, 10))
+        d.line([(int(size * 0.82), tray_y), (int(size * 0.82), int(size * 0.66))], fill=c, width=max(w - 2, 10))
+
+    elif name == "server":
+        d.rounded_rectangle([int(size * 0.18), int(size * 0.20), int(size * 0.82), int(size * 0.46)], radius=10, outline=c, width=w)
+        d.rounded_rectangle([int(size * 0.18), int(size * 0.54), int(size * 0.82), int(size * 0.80)], radius=10, outline=c, width=w)
+        d.ellipse([int(size * 0.28), int(size * 0.29), int(size * 0.36), int(size * 0.37)], fill=c)
+        d.ellipse([int(size * 0.28), int(size * 0.63), int(size * 0.36), int(size * 0.71)], fill=c)
+
+    elif name == "settings":
+        d.ellipse([int(size * 0.26), int(size * 0.26), int(size * 0.74), int(size * 0.74)], outline=c, width=w)
+        d.ellipse([int(size * 0.42), int(size * 0.42), int(size * 0.58), int(size * 0.58)], fill=c)
+        d.line([(int(size * 0.50), int(size * 0.12)), (int(size * 0.50), int(size * 0.26))], fill=c, width=w)
+        d.line([(int(size * 0.50), int(size * 0.74)), (int(size * 0.50), int(size * 0.88))], fill=c, width=w)
+        d.line([(int(size * 0.12), int(size * 0.50)), (int(size * 0.26), int(size * 0.50))], fill=c, width=w)
+        d.line([(int(size * 0.74), int(size * 0.50)), (int(size * 0.88), int(size * 0.50))], fill=c, width=w)
+
+    return img.resize((64, 64), Image.Resampling.LANCZOS)
+
+
+def ensure_cached_icons(splash=None):
+    """
+    Загружает иконки из вшитых ресурсов (_MEIPASS/icons) или папки icons/.
+    Для новых иконок (vram_clean, model_load) при отсутствии на диске пробует скачать PNG с CDN,
+    сохраняя в кэш, либо мгновенно рисует векторный фоллбэк в RAM.
+    """
+    if not HAS_PIL:
+        return {}
+    loaded = {}
+    total = len(ICON_NAMES)
+    for idx, name in enumerate(ICON_NAMES, start=1):
+        pct = 10 + int((idx / total) * 35)
+        if splash:
+            splash.set_progress(pct, f"Loading icon {name} ({idx}/{total})...")
+
+        pil_img = None
+        local_cache_file = os.path.join(ICONS_DIR, f"{name}.png")
+        for cand_path in (resource_path(os.path.join("icons", f"{name}.png")), local_cache_file):
+            if os.path.isfile(cand_path) and os.path.getsize(cand_path) > 100:
+                try:
+                    pil_img = Image.open(cand_path).convert("RGBA")
+                    break
+                except Exception:
+                    pass
+
+        if pil_img is None and name in CDN_ICON_URLS:
+            try:
+                os.makedirs(ICONS_DIR, exist_ok=True)
+                req = urllib.request.Request(CDN_ICON_URLS[name], headers={"User-Agent": "Mozilla/5.0"})
+                with urllib.request.urlopen(req, timeout=1.8) as resp:
+                    raw_bytes = resp.read()
+                if raw_bytes and len(raw_bytes) > 150:
+                    with open(local_cache_file, "wb") as f:
+                        f.write(raw_bytes)
+                    pil_img = Image.open(local_cache_file).convert("RGBA")
+            except Exception:
+                pil_img = None
+
+        if pil_img is None:
+            pil_img = _draw_fallback_icon(name)
+
+        loaded[name] = pil_img
+    return loaded
+
+
+def ensure_cached_flags(splash=None):
+    """
+    Загружает флаги стран из вшитых ресурсов .exe (_MEIPASS/icons/flags),
+    либо из локальной папки icons/flags/, либо мгновенно рисует их в оперативной памяти.
+    """
+    if not HAS_PIL:
+        return {}
+    unique_codes = sorted(set(LANG_ISO_MAP.values()))
+    loaded_pil = {}
+
+    if splash:
+        splash.set_progress(55, "Building embedded flag icons...")
+
+    for code in unique_codes:
+        pil_img = None
+        if code != "globe":
+            for cand_path in (
+                resource_path(os.path.join("icons", "flags", f"{code}.png")),
+                os.path.join(FLAGS_DIR, f"{code}.png")
+            ):
+                if os.path.isfile(cand_path) and os.path.getsize(cand_path) > 60:
+                    try:
+                        pil_img = Image.open(cand_path).convert("RGBA").resize((40, 28), Image.Resampling.LANCZOS)
+                        break
+                    except Exception:
+                        pass
+        if pil_img is None:
+            pil_img = _draw_procedural_flag(code, 40, 28)
+        if pil_img is not None:
+            loaded_pil[code] = pil_img
+
+    return loaded_pil
+
+
 def get_tkfont_for_widget(tk_widget, fallback_family=UI_FONT, fallback_size=-13, fallback_weight="bold"):
-    """
-    Возвращает объект tkfont.Font, точно соответствующий физическому шрифту нативного виджета Tk.
-    Это гарантирует, что f.measure(text) и tk_widget.winfo_width() работают в одних и тех же пикселях.
-    """
     try:
         font_spec = tk_widget.cget("font")
         if font_spec:
@@ -552,7 +996,6 @@ def get_tkfont_for_widget(tk_widget, fallback_family=UI_FONT, fallback_size=-13,
 
 
 def truncate_text_with_font(text, max_phys_px, tk_font_obj=None, fallback_char_px=8):
-    """Обрезает строку с добавлением '...' строго по физической ширине виджета в пикселях."""
     if not text or max_phys_px <= 20:
         return text
     if tk_font_obj is not None:
@@ -584,19 +1027,31 @@ def truncate_text_with_font(text, max_phys_px, tk_font_obj=None, fallback_char_p
 
 
 class HoverTooltip:
-    """Компактная всплывающая подсказка при наведении на сокращённый с '...' элемент."""
-    def __init__(self, widget, text_provider):
+    def __init__(self, widget, text_provider, delay_ms=500):
         self.widget = widget
         self.text_provider = text_provider
+        self.delay_ms = delay_ms
         self.tip_win = None
         self._after_id = None
-        widget.bind("<Enter>", self._on_enter, add="+")
-        widget.bind("<Leave>", self._on_leave, add="+")
-        widget.bind("<ButtonPress>", self._on_leave, add="+")
+
+        # Привязываем события ко всем под-виджетам CustomTkinter (canvas, entry, label)
+        targets = [widget]
+        for attr in ("_canvas", "_label", "_entry"):
+            sub = getattr(widget, attr, None)
+            if sub is not None and sub not in targets:
+                targets.append(sub)
+
+        for t in targets:
+            try:
+                t.bind("<Enter>", self._on_enter, add="+")
+                t.bind("<Leave>", self._on_leave, add="+")
+                t.bind("<ButtonPress>", self._on_leave, add="+")
+            except Exception:
+                pass
 
     def _on_enter(self, event=None):
         self._cancel()
-        self._after_id = self.widget.after(420, self._show)
+        self._after_id = self.widget.after(self.delay_ms, self._show)
 
     def _on_leave(self, event=None):
         self._cancel()
@@ -612,7 +1067,7 @@ class HoverTooltip:
 
     def _show(self):
         try:
-            full_text = self.text_provider()
+            full_text = self.text_provider() if callable(self.text_provider) else str(self.text_provider)
             if not full_text:
                 return
             self._hide()
@@ -660,16 +1115,10 @@ class HoverTooltip:
                 pass
             self.tip_win = None
 
-
 def strip_loaded_prefix(val):
     if not val:
         return ""
     return val[len(LOADED_PREFIX):].strip() if val.startswith(LOADED_PREFIX) else val.strip()
-
-
-def resource_path(relative_path):
-    base_path = getattr(sys, "_MEIPASS", BASE_DIR)
-    return os.path.join(base_path, relative_path)
 
 
 def resolve_lms_executable():
@@ -732,7 +1181,6 @@ LM_STUDIO_GUI_EXE = resolve_lm_studio_gui_exe()
 
 
 class GUISplashScreen:
-    """Графическое окно загрузки программы (кроссплатформенное)."""
     def __init__(self, parent, subtitle_text="Локальный нейросетевой переводчик", init_text="Инициализация..."):
         self.win = tk.Toplevel(parent)
         self.win.overrideredirect(True)
@@ -816,113 +1264,6 @@ class GUISplashScreen:
             pass
 
 
-def _draw_fallback_icon(name, size=192):
-    if not HAS_PIL:
-        return None
-    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    d = ImageDraw.Draw(img)
-    c = (255, 255, 255, 255)
-    w = max(int(size * 0.1), 12)
-
-    if name == "swap":
-        y1 = int(size * 0.34)
-        d.line([(int(size * 0.18), y1), (int(size * 0.82), y1)], fill=c, width=w)
-        d.polygon([(int(size * 0.85), y1), (int(size * 0.62), y1 - int(size * 0.18)), (int(size * 0.62), y1 + int(size * 0.18))], fill=c)
-        y2 = int(size * 0.66)
-        d.line([(int(size * 0.18), y2), (int(size * 0.82), y2)], fill=c, width=w)
-        d.polygon([(int(size * 0.15), y2), (int(size * 0.38), y2 - int(size * 0.18)), (int(size * 0.38), y2 + int(size * 0.18))], fill=c)
-
-    elif name == "clear":
-        d.line([(int(size * 0.22), int(size * 0.26)), (int(size * 0.78), int(size * 0.26))], fill=c, width=w)
-        d.rectangle([int(size * 0.38), int(size * 0.15), int(size * 0.62), int(size * 0.26)], outline=c, width=max(w // 2, 8))
-        d.rounded_rectangle([int(size * 0.28), int(size * 0.32), int(size * 0.72), int(size * 0.84)], radius=16, outline=c, width=w)
-        d.line([(int(size * 0.44), int(size * 0.44)), (int(size * 0.44), int(size * 0.70))], fill=c, width=max(w - 4, 8))
-        d.line([(int(size * 0.56), int(size * 0.44)), (int(size * 0.56), int(size * 0.70))], fill=c, width=max(w - 4, 8))
-
-    elif name == "play":
-        pts = [(int(size * 0.34), int(size * 0.20)), (int(size * 0.68), int(size * 0.50)), (int(size * 0.34), int(size * 0.80))]
-        d.line(pts, fill=c, width=int(w * 1.35), joint="curve")
-
-    elif name == "stop":
-        d.ellipse([int(size * 0.14), int(size * 0.14), int(size * 0.86), int(size * 0.86)], outline=c, width=w)
-        d.rounded_rectangle([int(size * 0.35), int(size * 0.35), int(size * 0.65), int(size * 0.65)], radius=8, fill=c)
-
-    elif name == "paste":
-        d.rounded_rectangle([int(size * 0.24), int(size * 0.24), int(size * 0.76), int(size * 0.86)], radius=16, outline=c, width=w)
-        d.rounded_rectangle([int(size * 0.38), int(size * 0.14), int(size * 0.62), int(size * 0.30)], radius=8, fill=c)
-
-    elif name == "copy":
-        d.rounded_rectangle([int(size * 0.20), int(size * 0.16), int(size * 0.66), int(size * 0.68)], radius=12, outline=c, width=w)
-        d.rounded_rectangle([int(size * 0.34), int(size * 0.32), int(size * 0.80), int(size * 0.84)], radius=12, fill=(30, 30, 30, 255), outline=c, width=w)
-
-    elif name == "refresh":
-        bbox = [int(size * 0.18), int(size * 0.18), int(size * 0.82), int(size * 0.82)]
-        d.arc(bbox, start=35, end=315, fill=c, width=w)
-        d.polygon([(int(size * 0.84), int(size * 0.18)), (int(size * 0.86), int(size * 0.46)), (int(size * 0.58), int(size * 0.38))], fill=c)
-
-    elif name == "vram":
-        d.rounded_rectangle([int(size * 0.26), int(size * 0.26), int(size * 0.74), int(size * 0.74)], radius=12, outline=c, width=w)
-        d.rectangle([int(size * 0.40), int(size * 0.40), int(size * 0.60), int(size * 0.60)], fill=c)
-        for pos in (0.36, 0.50, 0.64):
-            p = int(size * pos)
-            d.line([(p, int(size * 0.12)), (p, int(size * 0.26))], fill=c, width=max(w - 4, 8))
-            d.line([(p, int(size * 0.74)), (p, int(size * 0.88))], fill=c, width=max(w - 4, 8))
-            d.line([(int(size * 0.12), p), (int(size * 0.26), p)], fill=c, width=max(w - 4, 8))
-            d.line([(int(size * 0.74), p), (int(size * 0.88), p)], fill=c, width=max(w - 4, 8))
-
-    elif name == "server":
-        d.rounded_rectangle([int(size * 0.18), int(size * 0.20), int(size * 0.82), int(size * 0.46)], radius=10, outline=c, width=w)
-        d.rounded_rectangle([int(size * 0.18), int(size * 0.54), int(size * 0.82), int(size * 0.80)], radius=10, outline=c, width=w)
-        d.ellipse([int(size * 0.28), int(size * 0.29), int(size * 0.36), int(size * 0.37)], fill=c)
-        d.ellipse([int(size * 0.28), int(size * 0.63), int(size * 0.36), int(size * 0.71)], fill=c)
-
-    return img.resize((64, 64), Image.Resampling.LANCZOS)
-
-
-def ensure_cached_icons(splash=None):
-    if not HAS_PIL:
-        return {}
-    os.makedirs(ICONS_DIR, exist_ok=True)
-    loaded = {}
-    items = list(ICON_URLS.items())
-    total = len(items)
-    for idx, (name, url) in enumerate(items, start=1):
-        pct = 10 + int((idx / total) * 50)
-        if splash:
-            splash.set_progress(pct, f"Loading asset {name}.png ({idx}/{total})...")
-
-        file_path = os.path.join(ICONS_DIR, f"{name}.png")
-        if not (os.path.isfile(file_path) and os.path.getsize(file_path) > 100):
-            downloaded_ok = False
-            try:
-                req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-                with urllib.request.urlopen(req, timeout=1.2) as resp:
-                    data = resp.read()
-                    if data.startswith(b"\x89PNG\r\n\x1a\n"):
-                        with open(file_path, "wb") as f:
-                            f.write(data)
-                        downloaded_ok = True
-            except Exception:
-                pass
-
-            if not downloaded_ok:
-                img_fb = _draw_fallback_icon(name)
-                if img_fb is not None:
-                    try:
-                        img_fb.save(file_path, "PNG")
-                    except Exception:
-                        pass
-        else:
-            time.sleep(0.01)
-
-        try:
-            pil_img = Image.open(file_path).convert("RGBA")
-        except Exception:
-            pil_img = _draw_fallback_icon(name)
-        loaded[name] = pil_img
-    return loaded
-
-
 def smart_filter_items(query, items, aliases_dict):
     q = query.strip().lower()
     if not q:
@@ -936,9 +1277,9 @@ def smart_filter_items(query, items, aliases_dict):
 
     scored = []
     for item in items:
-        clean_item = strip_loaded_prefix(item)
+        clean_item = strip_flag_prefix(strip_loaded_prefix(item))
         item_low = clean_item.lower()
-        alias_low = aliases_dict.get(clean_item, "").lower()
+        alias_low = aliases_dict.get(clean_item, aliases_dict.get(strip_loaded_prefix(item), "")).lower()
         target_pool = f"{item_low} {alias_low}".strip()
 
         best_score = 0.0
@@ -962,12 +1303,11 @@ def smart_filter_items(query, items, aliases_dict):
 
 
 class SearchableDropdown(ctk.CTkFrame):
-    """
-    Кастомный выпадающий список с поиском, поддержкой Linux/Windows,
-    точным обрезанием длинных строк троеточием (...) по реальной ширине виджета
-    и всплывающей подсказкой полного имени при наведении.
-    """
-    def __init__(self, master, root_window, values, default_value, command=None, aliases=None, prefer_upwards=False, height=34, allow_custom=True, font_size=13):
+    def __init__(
+        self, master, root_window, values, default_value,
+        command=None, aliases=None, prefer_upwards=False,
+        height=34, allow_custom=True, font_size=13, flag_provider=None
+    ):
         super().__init__(
             master,
             fg_color=THEME["bg_dd"],
@@ -984,16 +1324,32 @@ class SearchableDropdown(ctk.CTkFrame):
         self.prefer_upwards = prefer_upwards
         self.allow_custom = allow_custom
         self.font_size = font_size
+        self.flag_provider = flag_provider
         self._is_editing = False
+        self._popup_open = False
 
         self.dropdown_win = None
-        self.listbox = None
+        self.list_canvas = None
         self.scrollbar = None
         self._filtered_items = []
+        self._selected_idx = 0
+        self._row_h = 28
 
-        self.grid_columnconfigure(0, weight=1)
-        self.grid_columnconfigure(1, weight=0)
+        self.grid_columnconfigure(0, weight=0)
+        self.grid_columnconfigure(1, weight=1)
+        self.grid_columnconfigure(2, weight=0)
         self.grid_propagate(False)
+
+        self.lbl_flag = tk.Label(
+            self,
+            bg=THEME["bg_dd"],
+            bd=0,
+            highlightthickness=0,
+            cursor="hand2"
+        )
+        if self.flag_provider is not None:
+            self.lbl_flag.grid(row=0, column=0, sticky="w", padx=(8, 2), pady=2)
+            self.lbl_flag.bind("<Button-1>", self._on_toggle_btn_click)
 
         self.entry = ctk.CTkEntry(
             self,
@@ -1003,7 +1359,7 @@ class SearchableDropdown(ctk.CTkFrame):
             border_width=0,
             text_color=THEME["text_main"]
         )
-        self.entry.grid(row=0, column=0, sticky="ew", padx=(4, 0), pady=2)
+        self.entry.grid(row=0, column=1, sticky="ew", padx=(4 if self.flag_provider is None else 2, 0), pady=2)
 
         self.btn_arrow = ctk.CTkButton(
             self,
@@ -1015,9 +1371,9 @@ class SearchableDropdown(ctk.CTkFrame):
             hover_color=THEME["bg_dd_hover"],
             text_color=THEME["text_muted"],
             corner_radius=6,
-            command=self._on_entry_click
+            command=self._on_toggle_btn_click
         )
-        self.btn_arrow.grid(row=0, column=1, sticky="e", padx=(0, 3), pady=2)
+        self.btn_arrow.grid(row=0, column=2, sticky="e", padx=(0, 3), pady=2)
 
         self.entry.insert(0, default_value)
 
@@ -1027,10 +1383,43 @@ class SearchableDropdown(ctk.CTkFrame):
         self.entry.bind("<Down>", self._on_arrow_down)
         self.entry.bind("<Up>", self._on_arrow_up)
         self.entry.bind("<Escape>", lambda e: self.close_dropdown())
+        self.entry.bind("<MouseWheel>", self._on_entry_mousewheel)
         self.bind("<Configure>", self._on_entry_configure, add="+")
         self.entry.bind("<Configure>", self._on_entry_configure, add="+")
 
         HoverTooltip(self.entry._entry, self._get_tooltip_if_truncated)
+
+    def _keep_entry_focus(self):
+        if self._is_editing and self._popup_open:
+            try:
+                self.entry._entry.focus_set()
+            except Exception:
+                pass
+
+    def _update_header_flag(self):
+        if self.flag_provider is None:
+            return
+        try:
+            if self._is_editing:
+                self.lbl_flag.configure(image="")
+                if self.lbl_flag.winfo_manager():
+                    self.lbl_flag.grid_remove()
+                self.entry.grid_configure(padx=(6, 0))
+                return
+            photo = self.flag_provider(self.current_val)
+            if photo is not None:
+                if not self.lbl_flag.winfo_manager():
+                    self.lbl_flag.grid(row=0, column=0, sticky="w", padx=(8, 2), pady=2)
+                self.entry.grid_configure(padx=(2, 0))
+                self.lbl_flag.configure(image=photo)
+                self.lbl_flag._image_ref = photo
+            else:
+                self.lbl_flag.configure(image="")
+                if self.lbl_flag.winfo_manager():
+                    self.lbl_flag.grid_remove()
+                self.entry.grid_configure(padx=(6, 0))
+        except Exception:
+            pass
 
     def _get_tooltip_if_truncated(self):
         if self._is_editing:
@@ -1045,16 +1434,17 @@ class SearchableDropdown(ctk.CTkFrame):
             self._refresh_display_text()
 
     def _refresh_display_text(self):
-        """Отображает self.current_val в поле с троеточием (...), используя точный физический шрифт tk.Entry."""
         if self._is_editing:
             return
+        self._update_header_flag()
         try:
             tk_ent = self.entry._entry
             phys_w = tk_ent.winfo_width()
             if phys_w <= 24:
                 frame_w = self.winfo_width()
                 arrow_w = max(self.btn_arrow.winfo_width(), 26)
-                phys_w = frame_w - arrow_w - 14
+                flag_w = 28 if self.flag_provider is not None else 0
+                phys_w = frame_w - arrow_w - flag_w - 14
 
             if phys_w <= 24:
                 if self.entry.get() != self.current_val:
@@ -1079,20 +1469,32 @@ class SearchableDropdown(ctk.CTkFrame):
             except Exception:
                 pass
 
-    def _on_entry_click(self, event=None):
-        if self.dropdown_win and self.dropdown_win.winfo_exists() and self.dropdown_win.winfo_ismapped():
+    def _start_editing_and_open(self):
+        if hasattr(self.root, "_close_all_dropdowns"):
+            self.root._close_all_dropdowns(except_dd=self)
+        self._is_editing = True
+        self._update_header_flag()
+        self.configure(border_color=THEME["border_focus"])
+        self.entry.delete(0, "end")
+        self.open_dropdown(self.values)
+        self.entry._entry.focus_set()
+
+    def _on_toggle_btn_click(self, event=None):
+        if self._popup_open and self.dropdown_win and self.dropdown_win.winfo_exists() and self.dropdown_win.winfo_ismapped():
             self.close_dropdown()
         else:
-            if hasattr(self.root, "_close_all_dropdowns"):
-                self.root._close_all_dropdowns(except_dd=self)
-            self._is_editing = True
-            self.configure(border_color=THEME["border_focus"])
-            self.entry.focus_set()
-            self.entry.delete(0, "end")
-            self.open_dropdown(self.values)
+            self._start_editing_and_open()
+        return "break"
+
+    def _on_entry_click(self, event=None):
+        if self._popup_open and self.dropdown_win and self.dropdown_win.winfo_exists() and self.dropdown_win.winfo_ismapped():
+            self.entry._entry.focus_set()
+            return
+        self._start_editing_and_open()
 
     def trigger_filter_from_entry(self):
         self._is_editing = True
+        self._update_header_flag()
         query = self.entry.get().strip().lower()
         if not query:
             matches = self.values
@@ -1101,7 +1503,9 @@ class SearchableDropdown(ctk.CTkFrame):
         else:
             matches = [
                 item for item in self.values
-                if query in item.lower() or query in self.aliases.get(strip_loaded_prefix(item), "")
+                if query in item.lower()
+                or query in self.aliases.get(strip_flag_prefix(strip_loaded_prefix(item)), "")
+                or query in self.aliases.get(strip_loaded_prefix(item), "")
             ]
         self.open_dropdown(matches)
 
@@ -1116,37 +1520,46 @@ class SearchableDropdown(ctk.CTkFrame):
             return
         self.trigger_filter_from_entry()
 
+    def _set_highlighted_row(self, new_idx, ensure_visible=True):
+        if not self._filtered_items or not self.list_canvas:
+            return
+        new_idx = max(0, min(new_idx, len(self._filtered_items) - 1))
+        old_idx = self._selected_idx
+        self._selected_idx = new_idx
+        try:
+            self.list_canvas.itemconfig(f"bg_{old_idx}", fill=THEME["bg_popup"])
+            self.list_canvas.itemconfig(f"bg_{new_idx}", fill=THEME["bg_accent"])
+            if ensure_visible:
+                total_h = max(1, len(self._filtered_items) * self._row_h)
+                vis_h = max(1, self.list_canvas.winfo_height())
+                top_frac, bot_frac = self.list_canvas.yview()
+                row_top = (new_idx * self._row_h) / total_h
+                row_bot = ((new_idx + 1) * self._row_h) / total_h
+                if row_top < top_frac:
+                    self.list_canvas.yview_moveto(row_top)
+                elif row_bot > bot_frac:
+                    self.list_canvas.yview_moveto(max(0.0, row_bot - (vis_h / total_h)))
+        except Exception:
+            pass
+
     def _on_arrow_down(self, event):
-        if not (self.dropdown_win and self.dropdown_win.winfo_ismapped()):
-            self._is_editing = True
-            self.configure(border_color=THEME["border_focus"])
-            self.open_dropdown(self.values)
+        if not (self._popup_open and self.dropdown_win and self.dropdown_win.winfo_ismapped()):
+            self._start_editing_and_open()
             return "break"
         if self._filtered_items:
-            sel = self.listbox.curselection()
-            nxt = min((sel[0] + 1) if sel else 0, len(self._filtered_items) - 1)
-            self.listbox.selection_clear(0, "end")
-            self.listbox.selection_set(nxt)
-            self.listbox.see(nxt)
+            self._set_highlighted_row(self._selected_idx + 1, ensure_visible=True)
         return "break"
 
     def _on_arrow_up(self, event):
-        if self.dropdown_win and self.dropdown_win.winfo_ismapped() and self._filtered_items:
-            sel = self.listbox.curselection()
-            prv = max((sel[0] - 1) if sel else 0, 0)
-            self.listbox.selection_clear(0, "end")
-            self.listbox.selection_set(prv)
-            self.listbox.see(prv)
+        if self._popup_open and self.dropdown_win and self.dropdown_win.winfo_ismapped() and self._filtered_items:
+            self._set_highlighted_row(self._selected_idx - 1, ensure_visible=True)
         return "break"
 
     def _on_enter(self, event=None):
         typed = self.entry.get().strip()
-        if self.dropdown_win and self.dropdown_win.winfo_ismapped() and self._filtered_items:
-            sel = self.listbox.curselection()
-            if sel:
-                self.select(self._filtered_items[sel[0]])
-                return
-            self.select(self._filtered_items[0])
+        if self._popup_open and self.dropdown_win and self.dropdown_win.winfo_ismapped() and self._filtered_items:
+            idx = max(0, min(self._selected_idx, len(self._filtered_items) - 1))
+            self.select(self._filtered_items[idx])
             return
         if self.allow_custom and typed and not typed.endswith("..."):
             self.select(typed, is_custom=True)
@@ -1157,146 +1570,196 @@ class SearchableDropdown(ctk.CTkFrame):
         if self.dropdown_win and self.dropdown_win.winfo_exists():
             return
 
-        self.dropdown_win = tk.Toplevel(self.root)
-        self.dropdown_win.withdraw()
-        self.dropdown_win.overrideredirect(True)
-        self.dropdown_win.attributes("-topmost", True)
-        if IS_LINUX:
-            try:
-                self.dropdown_win.wm_attributes("-type", "combo")
-            except Exception:
-                pass
-        self.dropdown_win.configure(bg=THEME["border_focus"], padx=1, pady=1)
+        # Внутриоконный фрейм-оверлей: не создает отдельного окна ОС и не забирает фокус у приложения
+        self.dropdown_win = tk.Frame(
+            self.root,
+            bg=THEME["border_focus"],
+            padx=1,
+            pady=1,
+            bd=0,
+            highlightthickness=0
+        )
 
         container = tk.Frame(self.dropdown_win, bg=THEME["bg_popup"], bd=0, highlightthickness=0)
         container.pack(fill="both", expand=True)
 
-        self.listbox = tk.Listbox(
+        self.list_canvas = tk.Canvas(
             container,
             bg=THEME["bg_popup"],
-            fg=THEME["text_main"],
-            selectbackground=THEME["bg_accent"],
-            selectforeground="#ffffff",
-            font=(UI_FONT, 11),
             bd=0,
             highlightthickness=0,
-            activestyle="none",
-            exportselection=False,
-            cursor="hand2"
+            cursor="hand2",
+            takefocus=0
         )
-        self.listbox.pack(side="left", fill="both", expand=True, padx=(6, 0), pady=4)
+        self.list_canvas.pack(side="left", fill="both", expand=True)
 
         self.scrollbar = ctk.CTkScrollbar(
             container,
-            command=self.listbox.yview,
+            command=self.list_canvas.yview,
             width=12,
             fg_color=THEME["bg_popup"],
             button_color="#323846",
             button_hover_color="#454d5e"
         )
         self.scrollbar.pack(side="right", fill="y", padx=2, pady=2)
-        self.listbox.configure(yscrollcommand=self.scrollbar.set)
+        self.list_canvas.configure(yscrollcommand=self.scrollbar.set)
 
-        self.listbox.bind("<Motion>", self._on_listbox_hover)
-        self.listbox.bind("<ButtonRelease-1>", self._on_listbox_click)
-        self.listbox.bind("<MouseWheel>", self._on_mousewheel)
-        self.listbox.bind("<Button-4>", lambda e: self.listbox.yview_scroll(-2, "units"))
-        self.listbox.bind("<Button-5>", lambda e: self.listbox.yview_scroll(2, "units"))
+        for sb_w in (self.scrollbar, getattr(self.scrollbar, "_canvas", None)):
+            if sb_w is not None:
+                sb_w.bind("<Button-1>", lambda e: self.after(1, self._keep_entry_focus), add="+")
+                sb_w.bind("<B1-Motion>", lambda e: self.after(1, self._keep_entry_focus), add="+")
+                sb_w.bind("<ButtonRelease-1>", lambda e: self.after(1, self._keep_entry_focus), add="+")
+                sb_w.bind("<MouseWheel>", self._on_mousewheel)
+
+        self.list_canvas.bind("<Motion>", self._on_canvas_hover)
+        self.list_canvas.bind("<ButtonRelease-1>", self._on_canvas_click)
+        self.list_canvas.bind("<MouseWheel>", self._on_mousewheel)
+        self.list_canvas.bind("<Button-4>", lambda e: self.list_canvas.yview_scroll(-2, "units"))
+        self.list_canvas.bind("<Button-5>", lambda e: self.list_canvas.yview_scroll(2, "units"))
+
+    def _on_entry_mousewheel(self, event):
+        if self._popup_open and self.list_canvas:
+            return self._on_mousewheel(event)
 
     def _on_mousewheel(self, event):
+        if not self.list_canvas:
+            return "break"
         delta = event.delta
         step = int(-1 * (delta / 120) * 2) if abs(delta) >= 120 else (-1 if delta > 0 else 1)
-        self.listbox.yview_scroll(step, "units")
+        self.list_canvas.yview_scroll(step, "units")
         return "break"
 
-    def _on_listbox_hover(self, event):
+    def _on_canvas_hover(self, event):
         if not self._filtered_items:
             return
-        idx = self.listbox.nearest(event.y)
-        if 0 <= idx < len(self._filtered_items):
-            self.listbox.selection_clear(0, "end")
-            self.listbox.selection_set(idx)
+        cy = self.list_canvas.canvasy(event.y)
+        idx = int(cy // self._row_h)
+        if 0 <= idx < len(self._filtered_items) and idx != self._selected_idx:
+            self._set_highlighted_row(idx, ensure_visible=False)
 
-    def _on_listbox_click(self, event):
+    def _on_canvas_click(self, event):
         if not self._filtered_items:
             return
-        idx = self.listbox.nearest(event.y)
+        cy = self.list_canvas.canvasy(event.y)
+        idx = int(cy // self._row_h)
         if 0 <= idx < len(self._filtered_items):
             self.select(self._filtered_items[idx])
 
     def _compute_popup_width_px(self):
-        try:
-            scale = self._get_widget_scaling()
-        except Exception:
-            scale = 1.0
-        frame_w = max(self.winfo_width(), int(180 * scale))
-        if not self.allow_custom:
-            return max(frame_w, int(330 * scale))
-        return frame_w
+        self.update_idletasks()
+        frame_w = self.winfo_width()
+        if not self.allow_custom and self.master is not None:
+            return max(frame_w, self.master.winfo_width())
+        return max(frame_w, 180)
 
     def sync_position(self):
-        if not self.dropdown_win or not self.dropdown_win.winfo_exists() or not self.dropdown_win.winfo_ismapped():
+        if not self._popup_open or not self.dropdown_win or not self.dropdown_win.winfo_exists():
             return
         if not self.root.winfo_viewable() or self.root.state() == "iconic":
             self.close_dropdown()
             return
 
+        self.root.update_idletasks()
         try:
             scale = self._get_widget_scaling()
         except Exception:
             scale = 1.0
-        box_x = self.winfo_rootx()
-        box_y = self.winfo_rooty()
+
+        rel_x = self.winfo_rootx() - self.root.winfo_rootx()
+        rel_y = self.winfo_rooty() - self.root.winfo_rooty()
         box_w = self._compute_popup_width_px()
         box_h = self.winfo_height()
-        screen_w = self.root.winfo_screenwidth()
-        screen_h = self.root.winfo_screenheight()
+        root_w = self.root.winfo_width()
+        root_h = self.root.winfo_height()
 
-        if box_x + box_w > screen_w - 8:
-            box_x = max(8, screen_w - box_w - 8)
+        if rel_x + box_w > root_w - 6:
+            box_w = max(160, root_w - rel_x - 6)
 
         count = max(len(self._filtered_items), 1)
-        row_phys_h = int(24 * scale)
-        pad_phys_h = int(12 * scale)
-        max_phys_h = int(240 * scale)
-        popup_phys_h = min(count * row_phys_h + pad_phys_h, max_phys_h)
+        self._row_h = max(26, int(26 * scale))
+        max_phys_h = int(260 * scale)
         gap_phys = max(int(4 * scale), 4)
 
-        space_below = screen_h - (box_y + box_h)
-        space_above = box_y
+        space_below = root_h - (rel_y + box_h) - 8
+        space_above = rel_y - 8
 
-        if (self.prefer_upwards and space_above >= popup_phys_h + gap_phys) or (space_below < popup_phys_h + gap_phys and space_above > space_below):
-            pos_y = box_y - popup_phys_h - gap_phys
+        if (self.prefer_upwards and space_above >= 120) or (space_below < 140 and space_above > space_below):
+            avail_h = max(80, space_above - gap_phys)
+            popup_phys_h = min(count * self._row_h + 6, max_phys_h, avail_h)
+            pos_y = rel_y - popup_phys_h - gap_phys
         else:
-            pos_y = box_y + box_h + gap_phys
+            avail_h = max(80, space_below - gap_phys)
+            popup_phys_h = min(count * self._row_h + 6, max_phys_h, avail_h)
+            pos_y = rel_y + box_h + gap_phys
 
-        self.dropdown_win.geometry(f"{box_w}x{popup_phys_h}+{box_x}+{pos_y}")
+        self.dropdown_win.place(x=rel_x, y=pos_y, width=box_w, height=popup_phys_h)
+        self.dropdown_win.lift()
 
     def open_dropdown(self, items):
         self._create_popup_if_needed()
         self._filtered_items = list(items)
+        self._popup_open = True
+        try:
+            scale = self._get_widget_scaling()
+        except Exception:
+            scale = 1.0
+        self._row_h = max(26, int(26 * scale))
 
         popup_phys_w = self._compute_popup_width_px()
-        avail_list_phys_px = max(140, popup_phys_w - 38)
-        lb_font = get_tkfont_for_widget(self.listbox, fallback_family=UI_FONT, fallback_size=-11, fallback_weight="normal")
+        sb_reserve = max(int(18 * scale), 18)
+        text_x = int(34 * scale) if self.flag_provider is not None else 12
+        avail_list_phys_px = max(120, popup_phys_w - text_x - sb_reserve - 8)
+        row_font = (UI_FONT, 11)
 
-        self.listbox.delete(0, "end")
+        self.list_canvas.delete("all")
+        self.list_canvas._img_refs = []
+
         if not self._filtered_items:
             msg = self.root._tr("custom_lang_hint") if self.allow_custom else self.root._tr("no_matches")
-            self.listbox.insert("end", truncate_text_with_font(msg, avail_list_phys_px, tk_font_obj=lb_font))
-            self.listbox.configure(fg="gray")
+            self.list_canvas.create_text(
+                12, self._row_h // 2,
+                text=msg, fill="gray", font=row_font, anchor="w"
+            )
+            self.list_canvas.configure(scrollregion=(0, 0, popup_phys_w - sb_reserve, self._row_h))
         else:
-            self.listbox.configure(fg=THEME["text_main"])
-            cur_clean = strip_loaded_prefix(self.current_val)
+            cur_clean = strip_flag_prefix(strip_loaded_prefix(self.current_val))
+            self._selected_idx = 0
             for idx, item in enumerate(self._filtered_items):
-                disp_item = truncate_text_with_font(item, avail_list_phys_px, tk_font_obj=lb_font)
-                self.listbox.insert("end", f"  {disp_item}")
-                if strip_loaded_prefix(item) == cur_clean:
-                    self.listbox.selection_set(idx)
+                if strip_flag_prefix(strip_loaded_prefix(item)) == cur_clean:
+                    self._selected_idx = idx
+                    break
 
-        self.listbox.yview_moveto(0.0)
-        self.dropdown_win.deiconify()
+            f_obj = get_tkfont_for_widget(self.list_canvas, fallback_family=UI_FONT, fallback_size=-11, fallback_weight="normal")
+            for idx, item in enumerate(self._filtered_items):
+                y0 = idx * self._row_h
+                y1 = y0 + self._row_h
+                yc = y0 + self._row_h // 2
+                bg_col = THEME["bg_accent"] if idx == self._selected_idx else THEME["bg_popup"]
+
+                self.list_canvas.create_rectangle(
+                    2, y0 + 1, popup_phys_w - sb_reserve, y1 - 1,
+                    fill=bg_col, outline="", tags=(f"bg_{idx}",)
+                )
+                if self.flag_provider is not None:
+                    photo = self.flag_provider(item)
+                    if photo is not None:
+                        self.list_canvas._img_refs.append(photo)
+                        self.list_canvas.create_image(int(17 * scale), yc, image=photo, anchor="center")
+
+                disp_item = truncate_text_with_font(item, avail_list_phys_px, tk_font_obj=f_obj)
+                self.list_canvas.create_text(
+                    text_x, yc,
+                    text=disp_item, fill="#ffffff", font=row_font, anchor="w"
+                )
+
+            total_h = len(self._filtered_items) * self._row_h
+            self.list_canvas.configure(scrollregion=(0, 0, popup_phys_w - sb_reserve, total_h))
+
+        self.list_canvas.yview_moveto(0.0)
         self.sync_position()
+        if self._filtered_items and self._selected_idx > 4:
+            self._set_highlighted_row(self._selected_idx, ensure_visible=True)
+        self._keep_entry_focus()
 
     def select(self, val, is_custom=False):
         if val in self.values or is_custom:
@@ -1304,9 +1767,10 @@ class SearchableDropdown(ctk.CTkFrame):
             if is_custom and val not in self.values:
                 self.values.append(val)
         self._is_editing = False
+        self._popup_open = False
         self.configure(border_color=THEME["border_subtle"])
         if self.dropdown_win and self.dropdown_win.winfo_exists():
-            self.dropdown_win.withdraw()
+            self.dropdown_win.place_forget()
         self._refresh_display_text()
         self.root.focus_set()
         if self.command:
@@ -1314,9 +1778,10 @@ class SearchableDropdown(ctk.CTkFrame):
 
     def close_dropdown(self):
         self._is_editing = False
+        self._popup_open = False
         self.configure(border_color=THEME["border_subtle"])
         if self.dropdown_win and self.dropdown_win.winfo_exists():
-            self.dropdown_win.withdraw()
+            self.dropdown_win.place_forget()
         self._refresh_display_text()
 
     def configure_values(self, new_values):
@@ -1351,17 +1816,30 @@ class LLMTranslateApp(ctk.CTk):
         self._apply_app_icon()
 
         self.raw_icons = ensure_cached_icons(splash=self.splash)
-        self.splash.set_progress(68, self._tr("splash_tex"))
+        self.raw_flags = ensure_cached_flags(splash=self.splash)
+        self.splash.set_progress(72, self._tr("splash_tex"))
+
         self.ctk_icons = {}
         icon_sizes = {
-            "swap": (18, 18), "clear": (18, 18), "play": (20, 20), "stop": (18, 18),
-            "paste": (15, 15), "copy": (15, 15), "refresh": (16, 16), "vram": (15, 15), "server": (15, 15)
+            "swap": (18, 18), "tts_play": (18, 18), "tts_stop": (18, 18), "play": (20, 20), "stop": (18, 18),
+            "refresh": (16, 16), "vram_clean": (16, 16), "model_load": (16, 16), "server": (15, 15), "settings": (16, 16)
         }
         for k, sz in icon_sizes.items():
             if k in self.raw_icons and self.raw_icons[k] is not None:
                 self.ctk_icons[k] = ctk.CTkImage(light_image=self.raw_icons[k], dark_image=self.raw_icons[k], size=sz)
             else:
                 self.ctk_icons[k] = None
+
+        self.flag_tk_photos = {}
+        self.flag_ctk_icons = {}
+        if HAS_PIL:
+            for code, pil_img in self.raw_flags.items():
+                try:
+                    resized = pil_img.resize((20, 14), Image.Resampling.LANCZOS)
+                    self.flag_tk_photos[code] = ImageTk.PhotoImage(resized)
+                    self.flag_ctk_icons[code] = ctk.CTkImage(light_image=pil_img, dark_image=pil_img, size=(18, 13))
+                except Exception:
+                    pass
 
         self.client = OpenAI(base_url=f"http://{LM_HOST}:{LM_PORT}/v1", api_key="lm-studio", timeout=15.0)
         self.model_id = self._tr("select_model")
@@ -1370,7 +1848,15 @@ class LLMTranslateApp(ctk.CTk):
         self._loaded_vram_models = set()
         self._is_online = False
         self._server_booting = False
+        self._is_loading_model = False
         self.use_smart_search = False
+        self.pin_window = False
+        self.settings_win = None
+
+        self._tts_proc = None
+        self._tts_lock = threading.Lock()
+        self._tts_stop_event = threading.Event()
+        self._is_speaking = False
 
         self.is_auto_detect = True
         self.detected_src_lang = None
@@ -1411,13 +1897,14 @@ class LLMTranslateApp(ctk.CTk):
 
         self.protocol("WM_DELETE_WINDOW", self.on_closing)
 
-        self.splash.set_progress(80, self._tr("splash_ui"))
+        self.splash.set_progress(82, self._tr("splash_ui"))
         self._build_ui()
 
-        self.splash.set_progress(90, self._tr("splash_cfg"))
+        self.splash.set_progress(92, self._tr("splash_cfg"))
         self._setup_bindings()
         self._load_config()
         self._update_swap_button_state()
+        self._sync_vram_button_visibility()
 
         self.splash.set_progress(100, self._tr("splash_start"))
         time.sleep(0.05)
@@ -1433,11 +1920,24 @@ class LLMTranslateApp(ctk.CTk):
         self.after(120, self._realtime_watcher)
         self.after(5000, self._auto_reconnect_loop)
 
+    def _get_flag_photo_for_label(self, label_text):
+        if not label_text or label_text in ALL_LANG_PLACEHOLDERS:
+            return None
+        clean = strip_flag_prefix(label_text)
+        if clean.startswith("Авто (") or clean.startswith("Auto Detect ("):
+            inner = clean.split("(", 1)[1].rstrip(")")
+            canon = self._lang_to_canonical(inner)
+        else:
+            canon = self._lang_to_canonical(clean)
+        iso = LANG_ISO_MAP.get(canon, "globe")
+        return self.flag_tk_photos.get(iso) or self.flag_tk_photos.get("globe")
+
     def _ensure_window_visible(self):
         try:
             self._withdraw_called_before_window_exists = False
             if self.state() != "normal":
                 self.deiconify()
+            self._apply_app_icon()
             self.lift()
             self.focus_force()
             for dd in (self.dd_src, self.dd_tgt, self.dd_model):
@@ -1465,7 +1965,7 @@ class LLMTranslateApp(ctk.CTk):
     def _lang_to_canonical(self, val):
         if not val:
             return ""
-        clean = val.strip()
+        clean = strip_flag_prefix(val)
         if clean in ALL_LANG_PLACEHOLDERS:
             return ""
         if (
@@ -1503,14 +2003,10 @@ class LLMTranslateApp(ctk.CTk):
         return f"{prefix} ({det_disp})"
 
     def _get_localized_world_languages(self):
-        if self.ui_lang == "ru":
-            return [LANG_EN_TO_RU[k] for k in WORLD_LANGUAGES_EN]
-        return list(WORLD_LANGUAGES_EN)
+        return [self._lang_to_display(k) for k in WORLD_LANGUAGES_EN]
 
     def _get_localized_target_languages(self):
-        if self.ui_lang == "ru":
-            return [LANG_EN_TO_RU[k] for k in TARGET_LANGUAGES_EN]
-        return list(TARGET_LANGUAGES_EN)
+        return [self._lang_to_display(k) for k in TARGET_LANGUAGES_EN]
 
     def _translate_pos_header(self, raw_header):
         if not raw_header:
@@ -1547,7 +2043,6 @@ class LLMTranslateApp(ctk.CTk):
         return banner, status
 
     def _sync_server_button_visibility(self):
-        """Автоматически скрывает кнопку Server, когда LM Studio в сети, и возвращает её при офлайне."""
         try:
             if self._is_online:
                 if self.btn_server.winfo_manager():
@@ -1560,6 +2055,183 @@ class LLMTranslateApp(ctk.CTk):
         except Exception:
             pass
 
+    def _sync_vram_button_visibility(self):
+        try:
+            clean_cur = strip_loaded_prefix(self.model_id)
+            valid_selected = self._is_valid_model_selected()
+            cur_is_loaded = valid_selected and (clean_cur in self._loaded_vram_models)
+            any_loaded = len(self._loaded_vram_models) > 0
+
+            if not self._is_online:
+                if hasattr(self, "btn_vram") and self.btn_vram.winfo_manager():
+                    self.btn_vram.grid_remove()
+                if hasattr(self, "btn_load_model") and self.btn_load_model.winfo_manager():
+                    self.btn_load_model.grid_remove()
+            elif cur_is_loaded or (not valid_selected and any_loaded):
+                if hasattr(self, "btn_load_model") and self.btn_load_model.winfo_manager():
+                    self.btn_load_model.grid_remove()
+                if hasattr(self, "btn_vram") and not self.btn_vram.winfo_manager():
+                    self.btn_vram.grid(row=0, column=3, padx=2)
+            elif valid_selected and not cur_is_loaded:
+                if hasattr(self, "btn_vram") and self.btn_vram.winfo_manager():
+                    self.btn_vram.grid_remove()
+                if hasattr(self, "btn_load_model") and not self.btn_load_model.winfo_manager():
+                    self.btn_load_model.grid(row=0, column=3, padx=2)
+            else:
+                if hasattr(self, "btn_vram") and self.btn_vram.winfo_manager():
+                    self.btn_vram.grid_remove()
+                if hasattr(self, "btn_load_model") and self.btn_load_model.winfo_manager():
+                    self.btn_load_model.grid_remove()
+
+            self.after(20, self.dd_model._refresh_display_text)
+        except Exception:
+            pass
+
+    def _toggle_settings_popup(self):
+        if self.settings_win and self.settings_win.winfo_exists() and self.settings_win.winfo_ismapped():
+            self._close_settings_popup()
+        else:
+            self._close_all_dropdowns(except_dd="settings")
+            self._open_settings_popup()
+
+    def _open_settings_popup(self):
+        if self.settings_win and self.settings_win.winfo_exists():
+            try:
+                self.settings_win.destroy()
+            except Exception:
+                pass
+
+        self.settings_win = tk.Frame(self, bg=THEME["border_focus"], padx=1, pady=1, bd=0, highlightthickness=0)
+
+        card = tk.Frame(self.settings_win, bg=THEME["bg_popup"], bd=0, highlightthickness=0)
+        card.pack(fill="both", expand=True)
+
+        self.lbl_set_title = tk.Label(
+            card, text=self._tr("settings_title"),
+            font=(UI_FONT, 10, "bold"), fg=THEME["text_muted"], bg=THEME["bg_popup"], anchor="w"
+        )
+        self.lbl_set_title.pack(fill="x", padx=14, pady=(10, 6))
+
+        sep = tk.Frame(card, bg=THEME["border_subtle"], height=1)
+        sep.pack(fill="x", padx=12, pady=(0, 6))
+
+        row_pin = tk.Frame(card, bg=THEME["bg_popup"])
+        row_pin.pack(fill="x", padx=14, pady=5)
+        self.lbl_set_pin = tk.Label(
+            row_pin, text=self._tr("settings_pin"),
+            font=(UI_FONT, 11), fg=THEME["text_main"], bg=THEME["bg_popup"], anchor="w"
+        )
+        self.lbl_set_pin.pack(side="left", fill="x", expand=True)
+
+        self.sw_pin = ctk.CTkSwitch(
+            row_pin, text="", width=40, switch_width=36, switch_height=19,
+            command=self._toggle_pin
+        )
+        self.sw_pin.pack(side="right")
+        if self.pin_window:
+            self.sw_pin.select()
+        else:
+            self.sw_pin.deselect()
+
+        row_smart = tk.Frame(card, bg=THEME["bg_popup"])
+        row_smart.pack(fill="x", padx=14, pady=5)
+        smart_title = "Умный поиск" if self.ui_lang == "ru" else "Smart Search"
+        self.lbl_set_smart = tk.Label(
+            row_smart, text=smart_title,
+            font=(UI_FONT, 11), fg=THEME["text_main"], bg=THEME["bg_popup"], anchor="w"
+        )
+        self.lbl_set_smart.pack(side="left", fill="x", expand=True)
+
+        self.sw_smart = ctk.CTkSwitch(
+            row_smart, text="", width=40, switch_width=36, switch_height=19,
+            command=self._toggle_smart_search
+        )
+        self.sw_smart.pack(side="right")
+        if self.use_smart_search:
+            self.sw_smart.select()
+        else:
+            self.sw_smart.deselect()
+
+        row_lang = tk.Frame(card, bg=THEME["bg_popup"])
+        row_lang.pack(fill="x", padx=14, pady=(6, 12))
+        self.lbl_set_lang = tk.Label(
+            row_lang, text=self._tr("settings_lang"),
+            font=(UI_FONT, 11), fg=THEME["text_main"], bg=THEME["bg_popup"], anchor="w"
+        )
+        self.lbl_set_lang.pack(side="left", fill="x", expand=True, padx=(0, 8))
+
+        lang_btns_frame = tk.Frame(row_lang, bg=THEME["bg_popup"])
+        lang_btns_frame.pack(side="right")
+
+        self.btn_lang_ru = ctk.CTkButton(
+            lang_btns_frame,
+            text="RU",
+            image=self.flag_ctk_icons.get("ru"),
+            compound="left",
+            width=58,
+            height=26,
+            corner_radius=6,
+            font=(UI_FONT, 11, "bold"),
+            fg_color=THEME["bg_accent"] if self.ui_lang == "ru" else THEME["bg_btn"],
+            hover_color=THEME["bg_accent_hover"] if self.ui_lang == "ru" else THEME["bg_btn_hover"],
+            command=lambda: self.set_ui_language("ru")
+        )
+        self.btn_lang_ru.pack(side="left", padx=(0, 4))
+
+        self.btn_lang_en = ctk.CTkButton(
+            lang_btns_frame,
+            text="EN",
+            image=self.flag_ctk_icons.get("gb"),
+            compound="left",
+            width=58,
+            height=26,
+            corner_radius=6,
+            font=(UI_FONT, 11, "bold"),
+            fg_color=THEME["bg_accent"] if self.ui_lang == "en" else THEME["bg_btn"],
+            hover_color=THEME["bg_accent_hover"] if self.ui_lang == "en" else THEME["bg_btn_hover"],
+            command=lambda: self.set_ui_language("en")
+        )
+        self.btn_lang_en.pack(side="left")
+
+        self.settings_win.update_idletasks()
+        self._sync_settings_popup_position()
+
+    def _sync_settings_popup_position(self):
+        if not self.settings_win or not self.settings_win.winfo_exists():
+            return
+        try:
+            self.update_idletasks()
+            self.settings_win.update_idletasks()
+            try:
+                scale = self._get_widget_scaling()
+            except Exception:
+                scale = 1.0
+            pw = max(self.settings_win.winfo_reqwidth(), int(275 * scale))
+            ph = max(self.settings_win.winfo_reqheight(), int(150 * scale))
+            bx = self.btn_settings.winfo_rootx() - self.winfo_rootx()
+            by = self.btn_settings.winfo_rooty() - self.winfo_rooty()
+            bw = self.btn_settings.winfo_width()
+            root_w = self.winfo_width()
+
+            x = min(max(8, bx + bw - pw), max(8, root_w - pw - 8))
+            y = max(8, by - ph - max(int(6 * scale), 6))
+            self.settings_win.place(x=x, y=y, width=pw, height=ph)
+            self.settings_win.lift()
+        except Exception:
+            pass
+
+    def _close_settings_popup(self):
+        if self.settings_win and self.settings_win.winfo_exists():
+            try:
+                self.settings_win.place_forget()
+            except Exception:
+                pass
+
+    def set_ui_language(self, new_lang):
+        if new_lang not in ("ru", "en") or new_lang == self.ui_lang:
+            return
+        self.toggle_ui_language()
+
     def toggle_ui_language(self):
         src_canon = "Auto Detect" if self.is_auto_detect else self._lang_to_canonical(self.dd_src.get())
         tgt_raw = self.dd_tgt.get()
@@ -1567,11 +2239,27 @@ class LLMTranslateApp(ctk.CTk):
         tgt_canon = "" if tgt_is_placeholder else self._lang_to_canonical(tgt_raw)
 
         self.ui_lang = "en" if self.ui_lang == "ru" else "ru"
-        self.btn_ui_lang.configure(text=self.ui_lang.upper())
-        self.btn_paste.configure(text=self._tr("paste"))
-        self.btn_copy.configure(text=self._tr("copy"))
+        self.chk_auto.configure(text=self._tr("auto_trans_chk"))
         self.btn_server.configure(text=self._tr("server_btn"))
         self.btn_instant.configure(text=self._tr("instant_btn"))
+
+        if self.settings_win and self.settings_win.winfo_exists():
+            try:
+                self.lbl_set_title.configure(text=self._tr("settings_title"))
+                self.lbl_set_pin.configure(text=self._tr("settings_pin"))
+                self.lbl_set_smart.configure(text="Умный поиск" if self.ui_lang == "ru" else "Smart Search")
+                self.lbl_set_lang.configure(text=self._tr("settings_lang"))
+                self.btn_lang_ru.configure(
+                    fg_color=THEME["bg_accent"] if self.ui_lang == "ru" else THEME["bg_btn"],
+                    hover_color=THEME["bg_accent_hover"] if self.ui_lang == "ru" else THEME["bg_btn_hover"]
+                )
+                self.btn_lang_en.configure(
+                    fg_color=THEME["bg_accent"] if self.ui_lang == "en" else THEME["bg_btn"],
+                    hover_color=THEME["bg_accent_hover"] if self.ui_lang == "en" else THEME["bg_btn_hover"]
+                )
+                self._sync_settings_popup_position()
+            except Exception:
+                pass
 
         self.dd_src.configure_values(self._get_localized_world_languages())
         self.dd_tgt.configure_values(self._get_localized_target_languages())
@@ -1634,9 +2322,8 @@ class LLMTranslateApp(ctk.CTk):
             lang = cfg.get("ui_lang", "ru")
             if lang in ("ru", "en") and lang != self.ui_lang:
                 self.ui_lang = lang
-                self.btn_ui_lang.configure(text=self.ui_lang.upper())
-                self.btn_paste.configure(text=self._tr("paste"))
-                self.btn_copy.configure(text=self._tr("copy"))
+                self.chk_auto.configure(text=self._tr("auto_trans_chk"))
+                self.use_smart_search = bool(cfg.get("smart_search", False))
                 self.btn_server.configure(text=self._tr("server_btn"))
                 self.btn_instant.configure(text=self._tr("instant_btn"))
                 self._set_status_label(self._tr("connecting"), THEME["text_muted"])
@@ -1677,12 +2364,8 @@ class LLMTranslateApp(ctk.CTk):
                 self.sw_smart.deselect()
                 self.use_smart_search = False
 
-            if cfg.get("pin_window", False):
-                self.sw_pin.select()
-                self.attributes("-topmost", True)
-            else:
-                self.sw_pin.deselect()
-                self.attributes("-topmost", False)
+            self.pin_window = bool(cfg.get("pin_window", False))
+            self.attributes("-topmost", self.pin_window)
         except Exception:
             pass
 
@@ -1699,8 +2382,8 @@ class LLMTranslateApp(ctk.CTk):
                 "tgt_lang": tgt_val,
                 "model_id": model_val,
                 "auto_translate": bool(self.chk_auto.get()),
-                "smart_search": bool(self.sw_smart.get()),
-                "pin_window": bool(self.sw_pin.get())
+                "smart_search": bool(self.use_smart_search),
+                "pin_window": bool(self.pin_window)
             }
             with open(CONFIG_PATH, "w", encoding="utf-8") as f:
                 json.dump(cfg, f, ensure_ascii=False, indent=2)
@@ -1710,23 +2393,32 @@ class LLMTranslateApp(ctk.CTk):
     def _apply_app_icon(self):
         ico_path = resource_path("logo.ico")
         png_path = resource_path("logo.png")
-        try:
-            if os.path.isfile(ico_path) and IS_WIN:
-                self.iconbitmap(ico_path)
+
+        def _force_set_icon():
+            if IS_WIN and os.path.isfile(ico_path):
+                try:
+                    self.iconbitmap(default=ico_path)
+                    self.iconbitmap(ico_path)
+                except Exception:
+                    pass
+
             if os.path.isfile(png_path):
-                self._icon_img = tk.PhotoImage(file=png_path)
-                self.iconphoto(True, self._icon_img)
-                return
-            if not os.path.isfile(ico_path):
-                img = tk.PhotoImage(width=32, height=32)
-                img.put("#1d4ed8", to=(2, 2, 30, 30))
-                img.put("#0f172a", to=(5, 5, 27, 27))
-                img.put("#3b82f6", to=(9, 9, 23, 13))
-                img.put("#3b82f6", to=(14, 13, 18, 24))
-                self._icon_img = img
-                self.iconphoto(True, self._icon_img)
-        except Exception:
-            pass
+                try:
+                    if HAS_PIL:
+                        pil_ico = Image.open(png_path).convert("RGBA")
+                        self._icon_img_64 = ImageTk.PhotoImage(pil_ico.resize((64, 64), Image.Resampling.LANCZOS))
+                        self._icon_img_32 = ImageTk.PhotoImage(pil_ico.resize((32, 32), Image.Resampling.LANCZOS))
+                        self.iconphoto(True, self._icon_img_64, self._icon_img_32)
+                    else:
+                        self._icon_img = tk.PhotoImage(file=png_path)
+                        self.iconphoto(True, self._icon_img)
+                    return
+                except Exception:
+                    pass
+
+        _force_set_icon()
+        # Перебиваем встроенный таймер CustomTkinter (200мс), который сбрасывает иконку на синий квадрат
+        self.after(250, _force_set_icon)
 
     def _build_ui(self):
         self.grid_columnconfigure(0, weight=1, uniform="panel")
@@ -1736,13 +2428,15 @@ class LLMTranslateApp(ctk.CTk):
 
         self.dd_src = SearchableDropdown(
             self, self, self._get_localized_world_languages(), self._tr("auto_detect"),
-            command=self._on_src_lang_selected, aliases=LANG_MAP, prefer_upwards=False, height=34, allow_custom=True
+            command=self._on_src_lang_selected, aliases=LANG_MAP, prefer_upwards=False,
+            height=34, allow_custom=True, flag_provider=self._get_flag_photo_for_label
         )
         self.dd_src.grid(row=0, column=0, sticky="ew", padx=(12, 6), pady=(12, 6))
 
         self.dd_tgt = SearchableDropdown(
             self, self, self._get_localized_target_languages(), self._tr("select_lang"),
-            command=self._on_tgt_lang_selected, aliases=LANG_MAP, prefer_upwards=False, height=34, allow_custom=True
+            command=self._on_tgt_lang_selected, aliases=LANG_MAP, prefer_upwards=False,
+            height=34, allow_custom=True, flag_provider=self._get_flag_photo_for_label
         )
         self.dd_tgt.grid(row=0, column=2, sticky="ew", padx=(6, 12), pady=(12, 6))
 
@@ -1771,13 +2465,13 @@ class LLMTranslateApp(ctk.CTk):
         )
         self.btn_swap.pack(pady=(0, 6))
 
-        self.btn_clear = ctk.CTkButton(
-            self.mid_bar, text="🧹" if not self.ctk_icons["clear"] else "", image=self.ctk_icons["clear"],
+        self.btn_tts = ctk.CTkButton(
+            self.mid_bar, text="🔊" if not self.ctk_icons["tts_play"] else "", image=self.ctk_icons["tts_play"],
             width=38, height=34, corner_radius=8,
             fg_color=THEME["bg_btn"], hover_color=THEME["bg_btn_hover"],
-            command=self.clear_all
+            command=self.toggle_tts
         )
-        self.btn_clear.pack(pady=6)
+        self.btn_tts.pack(pady=6)
 
         self.btn_go = ctk.CTkButton(
             self.mid_bar, text="❯" if not self.ctk_icons["play"] else "", image=self.ctk_icons["play"],
@@ -1827,7 +2521,6 @@ class LLMTranslateApp(ctk.CTk):
         )
         self.btn_instant.place_forget()
 
-
         self.progress_bar = ctk.CTkProgressBar(
             self, height=4, corner_radius=2,
             progress_color="#3b82f6", fg_color="#181c26"
@@ -1835,48 +2528,26 @@ class LLMTranslateApp(ctk.CTk):
         self.progress_bar.grid(row=2, column=0, columnspan=3, sticky="ew", padx=12, pady=(4, 2))
         self.progress_bar.set(0.0)
 
-
         self.bot_left = ctk.CTkFrame(self, fg_color="transparent", height=32)
         self.bot_left.grid(row=3, column=0, sticky="ew", padx=(12, 6), pady=(4, 12))
-        self.bot_left.grid_columnconfigure(4, weight=1)
-
-        self.btn_paste = ctk.CTkButton(
-            self.bot_left, text=self._tr("paste"), image=self.ctk_icons["paste"], compound="left",
-            width=80, height=30, corner_radius=7, font=(UI_FONT, 12, "bold"),
-            fg_color=THEME["bg_btn"], hover_color=THEME["bg_btn_hover"], command=self.paste_to_input
-        )
-        self.btn_paste.grid(row=0, column=0, padx=(0, 6))
+        self.bot_left.grid_columnconfigure(1, weight=1)
 
         self.chk_auto = ctk.CTkCheckBox(
-            self.bot_left, text="Auto", font=(UI_FONT, 12),
-            checkbox_width=17, checkbox_height=17, corner_radius=5, width=48,
+            self.bot_left, text=self._tr("auto_trans_chk"), font=(UI_FONT, 12),
+            checkbox_width=18, checkbox_height=18, corner_radius=5,
             command=self._save_config
         )
-        self.chk_auto.grid(row=0, column=1, padx=3)
+        self.chk_auto.grid(row=0, column=0, padx=(2, 10))
         self.chk_auto.select()
-
-        self.sw_smart = ctk.CTkSwitch(
-            self.bot_left, text="Smart Srch", font=(UI_FONT, 11),
-            switch_width=32, switch_height=18, width=62,
-            command=self._toggle_smart_search
-        )
-        self.sw_smart.grid(row=0, column=2, padx=3)
-
-        self.btn_ui_lang = ctk.CTkButton(
-            self.bot_left, text=self.ui_lang.upper(), width=34, height=30, corner_radius=7,
-            font=(UI_FONT, 11, "bold"), fg_color="#1e293b", hover_color="#334155",
-            command=self.toggle_ui_language
-        )
-        self.btn_ui_lang.grid(row=0, column=3, padx=(3, 6))
 
         self.lbl_status = ctk.CTkLabel(
             self.bot_left, text=self._tr("connecting"), font=(UI_FONT, 12, "bold"),
             text_color=THEME["text_muted"], anchor="e", height=30
         )
-        self.lbl_status.grid(row=0, column=4, sticky="ew", padx=(4, 2))
+        self.lbl_status.grid(row=0, column=1, sticky="ew", padx=(4, 2))
         self.bot_left.bind("<Configure>", lambda e: self._refresh_status_label_ellipsis(), add="+")
         if hasattr(self.lbl_status, "_label"):
-            HoverTooltip(self.lbl_status._label, self._get_status_tooltip_if_truncated)
+            HoverTooltip(self.lbl_status._label, self._get_status_tooltip_if_truncated, delay_ms=400)
 
         self.bot_right = ctk.CTkFrame(self, fg_color="transparent", height=32)
         self.bot_right.grid(row=3, column=2, sticky="ew", padx=(6, 12), pady=(4, 12))
@@ -1884,7 +2555,7 @@ class LLMTranslateApp(ctk.CTk):
 
         self.dd_model = SearchableDropdown(
             self.bot_right, self, [self._tr("select_model")], self._tr("select_model"),
-            command=self.set_model, prefer_upwards=True, height=30, allow_custom=False, font_size=12
+            command=self.set_model, prefer_upwards=True, height=30, allow_custom=False, font_size=12, flag_provider=None
         )
         self.dd_model.grid(row=0, column=0, sticky="ew", padx=(0, 4))
 
@@ -1905,28 +2576,334 @@ class LLMTranslateApp(ctk.CTk):
         )
         self.btn_server.grid(row=0, column=2, padx=2)
 
-        self.btn_copy = ctk.CTkButton(
-            self.bot_right, text=self._tr("copy"), image=self.ctk_icons["copy"], compound="left",
-            width=66, height=30, corner_radius=7, font=(UI_FONT, 12, "bold"),
-            fg_color=THEME["bg_btn"], hover_color=THEME["bg_btn_hover"],
-            command=self.copy_output
+        self.btn_load_model = ctk.CTkButton(
+            self.bot_right, text="⬇" if not self.ctk_icons.get("model_load") else "", image=self.ctk_icons.get("model_load"),
+            width=30, height=30, corner_radius=7,
+            fg_color=THEME["bg_btn"], hover_color=THEME["bg_accent"],
+            command=self.load_selected_model_to_vram
         )
-        self.btn_copy.grid(row=0, column=3, padx=2)
-
-        self.sw_pin = ctk.CTkSwitch(
-            self.bot_right, text="Pin", width=44,
-            switch_width=32, switch_height=18, font=(UI_FONT, 11),
-            command=self._toggle_pin
-        )
-        self.sw_pin.grid(row=0, column=4, padx=3)
+        self.btn_load_model.grid(row=0, column=3, padx=2)
 
         self.btn_vram = ctk.CTkButton(
-            self.bot_right, text="VRAM", image=self.ctk_icons["vram"], compound="left",
-            width=60, height=30, corner_radius=7, font=(UI_FONT, 12, "bold"),
+            self.bot_right, text="VRAM", image=self.ctk_icons.get("vram_clean"), compound="left",
+            width=62, height=30, corner_radius=7, font=(UI_FONT, 12, "bold"),
             fg_color=THEME["bg_danger"], hover_color=THEME["bg_danger_hover"],
             command=self.unload_vram
         )
-        self.btn_vram.grid(row=0, column=5, padx=(2, 0))
+        self.btn_vram.grid(row=0, column=3, padx=2)
+
+        self.btn_settings = ctk.CTkButton(
+            self.bot_right, text="⚙" if not self.ctk_icons["settings"] else "", image=self.ctk_icons["settings"],
+            width=30, height=30, corner_radius=7,
+            fg_color=THEME["bg_btn"], hover_color=THEME["bg_btn_hover"],
+            command=self._toggle_settings_popup
+        )
+        self.btn_settings.grid(row=0, column=4, padx=(2, 0))
+        # Всплывающие подсказки при долгом наведении
+        HoverTooltip(self.btn_swap, lambda: self._tr("tip_swap"), delay_ms=500)
+        HoverTooltip(self.btn_tts, lambda: self._tr("tip_tts"), delay_ms=500)
+        HoverTooltip(self.btn_go, lambda: self._tr("tip_go"), delay_ms=500)
+        HoverTooltip(self.btn_stop, lambda: self._tr("tip_stop"), delay_ms=500)
+        HoverTooltip(self.chk_auto, lambda: self._tr("tip_auto_chk"), delay_ms=500)
+        HoverTooltip(self.btn_refresh, lambda: self._tr("tip_refresh"), delay_ms=500)
+        HoverTooltip(self.btn_server, lambda: self._tr("tip_server"), delay_ms=500)
+        HoverTooltip(self.btn_load_model, lambda: self._tr("tip_load_model"), delay_ms=500)
+        HoverTooltip(self.btn_vram, lambda: self._tr("tip_vram"), delay_ms=500)
+        HoverTooltip(self.btn_settings, lambda: self._tr("tip_settings"), delay_ms=500)
+
+    @staticmethod
+    def _split_tts_sentences(text, max_len=180):
+        raw_parts = re.split(r"(?<=[.!?;\n])\s+", text)
+        chunks = []
+        for part in raw_parts:
+            part = part.strip()
+            if not part:
+                continue
+            while len(part) > max_len:
+                cut = part.rfind(" ", 0, max_len)
+                if cut <= 0:
+                    cut = max_len
+                chunks.append(part[:cut].strip())
+                part = part[cut:].strip()
+            if part:
+                chunks.append(part)
+        return chunks if chunks else [text[:max_len]]
+
+    def _mci_send_main_thread(self, cmd):
+        """Выполняет команду MCI в главном потоке Tkinter (где есть Windows Message Loop)."""
+        if not IS_WIN:
+            return ""
+        res_holder = [""]
+        done_ev = threading.Event()
+
+        def _run():
+            try:
+                buf = ctypes.create_unicode_buffer(256)
+                rc = ctypes.windll.winmm.mciSendStringW(cmd, buf, 256, 0)
+                res_holder[0] = f"ERR:{rc}" if rc != 0 else buf.value
+            except Exception as e:
+                res_holder[0] = f"ERR:{e}"
+            finally:
+                done_ev.set()
+
+        self.after(0, _run)
+        done_ev.wait(timeout=1.5)
+        return res_holder[0]
+
+    @staticmethod
+    def _fetch_tts_mp3_bytes(chunk, tl_code):
+        url = (
+            "https://translate.googleapis.com/translate_tts"
+            f"?ie=UTF-8&client=gtx&tl={urllib.parse.quote(tl_code)}&q={urllib.parse.quote(chunk)}"
+        )
+        req = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Referer": "https://translate.google.com/"
+            }
+        )
+        with urllib.request.urlopen(req, timeout=3.0) as resp:
+            data = resp.read()
+        return data if (data and len(data) >= 256) else None
+
+    def toggle_tts(self):
+        if self._is_speaking:
+            self.stop_tts(show_status=True)
+            return
+
+        text_to_speak = self._extract_clean_main_output()
+        if not text_to_speak:
+            self._stop_status_anim(self._tr("tts_empty"), "#eab308", 0.0)
+            return
+
+        clean_speech = re.sub(r"[*_`~+#>]", "", text_to_speak).strip()
+        if not clean_speech:
+            return
+
+        tgt_canon = self._get_effective_tgt_lang() or "English"
+        tl_code = TTS_LANG_CODE_MAP.get(tgt_canon, "en")
+        bcp47 = TTS_BCP47_MAP.get(tgt_canon, "en-US")
+
+        self._tts_stop_event.clear()
+        self._is_speaking = True
+        self.btn_tts.configure(
+            text="⏹" if not self.ctk_icons["tts_stop"] else "",
+            image=self.ctk_icons["tts_stop"],
+            fg_color=THEME["bg_accent"],
+            hover_color=THEME["bg_accent_hover"]
+        )
+        self._stop_status_anim(self._tr("tts_speaking"), "#3b82f6", 1.0)
+
+        def tts_worker():
+            played_online = False
+            tmp_mp3 = os.path.join(tempfile.gettempdir(), f"llm_tts_{os.getpid()}.mp3")
+            try:
+                sentences = self._split_tts_sentences(clean_speech, max_len=180)
+                audio_buffers = [None] * len(sentences)
+                ready_events = [threading.Event() for _ in sentences]
+
+                # Параллельная предзагрузка всех фраз в RAM, чтобы не было пауз между предложениями
+                def prefetch_idx(i, text_chunk):
+                    try:
+                        if not self._tts_stop_event.is_set():
+                            audio_buffers[i] = self._fetch_tts_mp3_bytes(text_chunk, tl_code)
+                    except Exception:
+                        audio_buffers[i] = None
+                    finally:
+                        ready_events[i].set()
+
+                for i, ch in enumerate(sentences):
+                    threading.Thread(target=prefetch_idx, args=(i, ch), daemon=True).start()
+
+                for i in range(len(sentences)):
+                    if self._tts_stop_event.is_set():
+                        break
+                    ready_events[i].wait(timeout=3.5)
+                    audio_bytes = audio_buffers[i]
+                    if not audio_bytes:
+                        break
+
+                    with open(tmp_mp3, "wb") as f:
+                        f.write(audio_bytes)
+
+                    if IS_WIN:
+                        self._mci_send_main_thread("close llm_tts")
+                        short_p = get_win_short_path(tmp_mp3)
+                        open_res = self._mci_send_main_thread(f'open "{short_p}" type mpegvideo alias llm_tts')
+                        if open_res.startswith("ERR:"):
+                            break
+
+                        self._mci_send_main_thread("setaudio llm_tts volume to 1000")
+                        len_str = self._mci_send_main_thread("status llm_tts length")
+                        total_ms = int(len_str) if len_str.isdigit() else 0
+
+                        play_res = self._mci_send_main_thread("play llm_tts from 0")
+                        if play_res.startswith("ERR:"):
+                            self._mci_send_main_thread("close llm_tts")
+                            break
+
+                        played_online = True
+                        start_t = time.monotonic()
+                        max_wait = (total_ms / 1000.0 + 0.4) if total_ms > 0 else 15.0
+
+                        while not self._tts_stop_event.is_set():
+                            if time.monotonic() - start_t > max_wait:
+                                break
+                            pos_str = self._mci_send_main_thread("status llm_tts position")
+                            if total_ms > 0 and pos_str.isdigit() and int(pos_str) >= total_ms - 35:
+                                break
+                            mode_str = self._mci_send_main_thread("status llm_tts mode").lower()
+                            if mode_str in ("stopped", "not ready", "") and (time.monotonic() - start_t) > 0.2:
+                                break
+                            time.sleep(0.03)
+
+                        self._mci_send_main_thread("close llm_tts")
+                    elif IS_MAC:
+                        played_online = True
+                        proc = subprocess.Popen(["afplay", tmp_mp3], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        with self._tts_lock:
+                            self._tts_proc = proc
+                        while proc.poll() is None and not self._tts_stop_event.is_set():
+                            time.sleep(0.03)
+                        if proc.poll() is None:
+                            proc.kill()
+                    else:
+                        for player in (["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", tmp_mp3], ["mpg123", "-q", tmp_mp3]):
+                            if shutil.which(player[0]):
+                                played_online = True
+                                proc = subprocess.Popen(player, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                with self._tts_lock:
+                                    self._tts_proc = proc
+                                while proc.poll() is None and not self._tts_stop_event.is_set():
+                                    time.sleep(0.03)
+                                if proc.poll() is None:
+                                    proc.kill()
+                                break
+            except Exception:
+                pass
+            finally:
+                if IS_WIN:
+                    self._mci_send_main_thread("close llm_tts")
+                if os.path.exists(tmp_mp3):
+                    try:
+                        os.remove(tmp_mp3)
+                    except Exception:
+                        pass
+
+            if not played_online and not self._tts_stop_event.is_set():
+                proc = None
+                try:
+                    if IS_WIN:
+                        b64_orig = base64.b64encode(clean_speech.encode("utf-8")).decode("ascii")
+                        phonetic_ru = transliterate_en_to_ru_phonetic(clean_speech)
+                        b64_phon = base64.b64encode(phonetic_ru.encode("utf-8")).decode("ascii")
+                        lang_prefix = bcp47.split("-")[0].lower()
+                        ps_script = (
+                            f"$orig = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('{b64_orig}')); "
+                            f"$phon = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('{b64_phon}')); "
+                            "Add-Type -AssemblyName System.Speech; "
+                            "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
+                            "$s.SetOutputToDefaultAudioDevice(); "
+                            "$s.Volume = 100; "
+                            "$matched = $false; "
+                            "foreach ($v in $s.GetInstalledVoices()) { "
+                            f"  if ($v.Enabled -and $v.VoiceInfo.Culture.Name.ToLower().StartsWith('{lang_prefix}')) {{ "
+                            "    $s.SelectVoice($v.VoiceInfo.Name); $matched = $true; break "
+                            "  } "
+                            "} "
+                            "if ($matched) { $s.Speak($orig) } "
+                            "elseif ($s.Voice.Culture.Name.ToLower().StartsWith('ru') -and $orig -notmatch '[а-яА-ЯёЁ]') { $s.Speak($phon) } "
+                            "else { $s.Speak($orig) }"
+                        )
+                        proc = subprocess.Popen(
+                            ["powershell", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", ps_script],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            creationflags=subprocess.CREATE_NO_WINDOW
+                        )
+                        with self._tts_lock:
+                            self._tts_proc = proc
+                        while proc.poll() is None and not self._tts_stop_event.is_set():
+                            time.sleep(0.04)
+                        if proc.poll() is None:
+                            proc.kill()
+                    elif IS_MAC:
+                        proc = subprocess.Popen(["say", clean_speech], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        with self._tts_lock:
+                            self._tts_proc = proc
+                        proc.wait()
+                    else:
+                        lang_short = bcp47.split("-")[0]
+                        for cmd in (
+                            ["spd-say", "-w", "-l", lang_short, clean_speech],
+                            ["espeak-ng", "-v", lang_short, clean_speech],
+                            ["espeak", "-v", lang_short, clean_speech],
+                        ):
+                            if shutil.which(cmd[0]):
+                                proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                with self._tts_lock:
+                                    self._tts_proc = proc
+                                proc.wait()
+                                break
+                except Exception:
+                    pass
+                finally:
+                    with self._tts_lock:
+                        if self._tts_proc is proc:
+                            self._tts_proc = None
+
+            self.after(0, self._reset_tts_ui_after_finish)
+
+        threading.Thread(target=tts_worker, daemon=True).start()
+
+    def _reset_tts_ui_after_finish(self):
+        if not self._is_speaking:
+            return
+        self._is_speaking = False
+        self.btn_tts.configure(
+            text="🔊" if not self.ctk_icons["tts_play"] else "",
+            image=self.ctk_icons["tts_play"],
+            fg_color=THEME["bg_btn"],
+            hover_color=THEME["bg_btn_hover"]
+        )
+        if not self._anim_running:
+            if self._tw_final_status_msg:
+                self._stop_status_anim(self._tw_final_status_msg, self._tw_final_status_color, 1.0)
+            else:
+                self._stop_status_anim(self._tr("done"), "#22c55e", 1.0)
+
+    def stop_tts(self, show_status=False):
+        self._tts_stop_event.set()
+        if IS_WIN:
+            try:
+                ctypes.windll.winmm.mciSendStringW("close llm_tts", None, 0, 0)
+            except Exception:
+                pass
+        with self._tts_lock:
+            proc = self._tts_proc
+            self._tts_proc = None
+        if proc is not None:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+        tmp_mp3 = os.path.join(tempfile.gettempdir(), f"llm_tts_{os.getpid()}.mp3")
+        if os.path.exists(tmp_mp3):
+            try:
+                os.remove(tmp_mp3)
+            except Exception:
+                pass
+        if self._is_speaking:
+            self._is_speaking = False
+            self.btn_tts.configure(
+                text="🔊" if not self.ctk_icons["tts_play"] else "",
+                image=self.ctk_icons["tts_play"],
+                fg_color=THEME["bg_btn"],
+                hover_color=THEME["bg_btn_hover"]
+            )
+            if show_status and not self._anim_running:
+                self._stop_status_anim(self._tr("tts_stopped"), "#eab308", 0.0)
 
     def _get_status_tooltip_if_truncated(self):
         try:
@@ -1938,10 +2915,6 @@ class LLMTranslateApp(ctk.CTk):
         return ""
 
     def _refresh_status_label_ellipsis(self):
-        """
-        Безопасно обновляет текст и цвет self.lbl_status, подрезая троеточием (...)
-        только если текст действительно превышает физическую ширину колонки.
-        """
         try:
             tk_lbl = getattr(self.lbl_status, "_label", self.lbl_status)
             phys_w = self.lbl_status.winfo_width()
@@ -2120,6 +3093,7 @@ class LLMTranslateApp(ctk.CTk):
         return f"{LOADED_PREFIX}{clean}" if clean in self._loaded_vram_models else clean
 
     def _refresh_model_dropdown_labels(self):
+        self._sync_vram_button_visibility()
         if not self._is_online or not self._available_models:
             return
         placeholder = self._tr("select_model")
@@ -2160,6 +3134,8 @@ class LLMTranslateApp(ctk.CTk):
         clean_target = strip_loaded_prefix(target_model)
         if not clean_target or clean_target in ALL_MODEL_PLACEHOLDERS:
             return
+        if clean_target not in self._loaded_vram_models:
+            return
         for _ in range(2):
             self._run_lms_cmd(["unload", clean_target], timeout=10)
             currently_loaded = self._query_lms_ps_loaded_models()
@@ -2168,6 +3144,8 @@ class LLMTranslateApp(ctk.CTk):
         self._loaded_vram_models.discard(clean_target)
 
     def _verified_unload_all_vram(self, timeout_per_step=8):
+        if not self._loaded_vram_models:
+            return True
         self._run_lms_cmd(["unload", "--all"], timeout=timeout_per_step)
         remaining = self._query_lms_ps_loaded_models()
         if remaining:
@@ -2178,7 +3156,11 @@ class LLMTranslateApp(ctk.CTk):
         return len(remaining) == 0
 
     def _toggle_pin(self):
-        self.attributes("-topmost", bool(self.sw_pin.get()))
+        if hasattr(self, "sw_pin") and self.sw_pin.winfo_exists():
+            self.pin_window = bool(self.sw_pin.get())
+        else:
+            self.pin_window = not self.pin_window
+        self.attributes("-topmost", self.pin_window)
         self._save_config()
 
     def _on_src_lang_selected(self, val):
@@ -2236,7 +3218,10 @@ class LLMTranslateApp(ctk.CTk):
         self.btn_swap.configure(state="normal" if can_swap else "disabled")
 
     def _toggle_smart_search(self):
-        self.use_smart_search = bool(self.sw_smart.get())
+        if hasattr(self, "sw_smart") and self.sw_smart.winfo_exists():
+            self.use_smart_search = bool(self.sw_smart.get())
+        else:
+            self.use_smart_search = not self.use_smart_search
         self._save_config()
 
     def _start_status_anim(self, phase_text, color="#eab308", bar_color="#eab308"):
@@ -2661,6 +3646,33 @@ class LLMTranslateApp(ctk.CTk):
         if event is not None and event.widget is self:
             self._close_all_dropdowns()
 
+    @staticmethod
+    def _is_event_inside_widget(event, target_widget):
+        if target_widget is None or not target_widget.winfo_exists():
+            return False
+        try:
+            curr = event.widget
+            while curr is not None:
+                if curr is target_widget:
+                    return True
+                curr = getattr(curr, "master", None)
+            if str(event.widget).startswith(str(target_widget)):
+                return True
+            if target_widget.winfo_ismapped():
+                wx = target_widget.winfo_rootx()
+                wy = target_widget.winfo_rooty()
+                ww = target_widget.winfo_width()
+                wh = target_widget.winfo_height()
+                if wx <= event.x_root <= wx + ww and wy <= event.y_root <= wy + wh:
+                    return True
+        except Exception:
+            pass
+        return False
+
+    def _on_window_unmap(self, event=None):
+        if event is not None and event.widget is self:
+            self._close_all_dropdowns()
+
     def _on_app_focus_out(self, event=None):
         def check_focus():
             try:
@@ -2682,14 +3694,18 @@ class LLMTranslateApp(ctk.CTk):
         self._last_win_rect = rect
         for dd in (self.dd_src, self.dd_tgt, self.dd_model):
             dd._refresh_display_text()
-            if dd.dropdown_win and dd.dropdown_win.winfo_exists() and dd.dropdown_win.winfo_ismapped():
+            if dd._popup_open and dd.dropdown_win and dd.dropdown_win.winfo_exists():
                 dd.sync_position()
+        if self.settings_win and self.settings_win.winfo_exists() and self.settings_win.winfo_ismapped():
+            self._sync_settings_popup_position()
         self._refresh_status_label_ellipsis()
 
     def _close_all_dropdowns(self, except_dd=None):
         for dd in (self.dd_src, self.dd_tgt, self.dd_model):
             if dd is not except_dd:
                 dd.close_dropdown()
+        if except_dd != "settings":
+            self._close_settings_popup()
 
     def _mark_edited(self, event=None):
         if event and event.keysym in ("Control_L", "Control_R", "Shift_L", "Shift_R", "Alt_L", "Alt_R", "Left", "Right", "Up", "Down"):
@@ -2707,6 +3723,7 @@ class LLMTranslateApp(ctk.CTk):
             if not current_text:
                 if self._last_translated_state[0] != "" or self.detected_src_lang is not None:
                     self._abort_active_stream()
+                    self.stop_tts()
                     self._last_translated_state = ("", "", "", "")
                     self._last_clean_translation = ""
                     self._last_selected_out_text = ""
@@ -2756,14 +3773,20 @@ class LLMTranslateApp(ctk.CTk):
         self.start_translation()
 
     def _check_outside_click(self, event):
-        w = event.widget
+        if self.settings_win and self.settings_win.winfo_exists() and self.settings_win.winfo_ismapped():
+            if not (
+                self._is_event_inside_widget(event, self.settings_win)
+                or self._is_event_inside_widget(event, self.btn_settings)
+            ):
+                self._close_settings_popup()
+
         for dd in (self.dd_src, self.dd_tgt, self.dd_model):
-            if dd.dropdown_win and dd.dropdown_win.winfo_exists() and dd.dropdown_win.winfo_ismapped():
-                try:
-                    if str(w).startswith(str(dd.dropdown_win)) or str(w).startswith(str(dd)):
-                        return
-                except Exception:
-                    pass
+            if dd._popup_open and dd.dropdown_win and dd.dropdown_win.winfo_exists():
+                if (
+                    self._is_event_inside_widget(event, dd.dropdown_win)
+                    or self._is_event_inside_widget(event, dd)
+                ):
+                    return
                 dd.close_dropdown()
 
     def _select_all_widget(self, tb):
@@ -2876,6 +3899,7 @@ class LLMTranslateApp(ctk.CTk):
 
     def clear_all(self):
         self._abort_active_stream()
+        self.stop_tts()
         self._last_translated_state = ("", "", "", "")
         self._last_clean_translation = ""
         self._last_selected_out_text = ""
@@ -2883,6 +3907,7 @@ class LLMTranslateApp(ctk.CTk):
         self._tw_dict_sections = []
         self._tw_mismatch_warning = ""
         self._tw_mismatch_langs = None
+        self._tw_final_status_msg = ""
         if self.is_auto_detect:
             self.detected_src_lang = None
             self.dd_src.set(self._format_auto_detect_display(None))
@@ -2903,6 +3928,7 @@ class LLMTranslateApp(ctk.CTk):
             return
 
         self.skip_typewriter_animation()
+        self.stop_tts()
         self.is_auto_detect = False
         self.detected_src_lang = None
         self.dd_src.set(self._lang_to_display(tgt_canon))
@@ -3027,8 +4053,9 @@ class LLMTranslateApp(ctk.CTk):
         self._refresh_model_dropdown_labels()
 
         should_unload_old = (
-            old_model and old_model != new_model and
-            old_model not in ALL_MODEL_PLACEHOLDERS
+            old_model and old_model != new_model
+            and old_model not in ALL_MODEL_PLACEHOLDERS
+            and old_model in self._loaded_vram_models
         )
 
         if should_unload_old:
@@ -3073,6 +4100,7 @@ class LLMTranslateApp(ctk.CTk):
                         self.after(0, lambda n=names: self._update_models_ui(n, True))
                     else:
                         self._available_models = []
+                        self._loaded_vram_models = set()
                         self.after(0, lambda: self._update_models_ui([self._tr("no_models")], False))
                     return
                 except Exception:
@@ -3097,6 +4125,7 @@ class LLMTranslateApp(ctk.CTk):
                         except Exception:
                             continue
 
+            self._loaded_vram_models = set()
             self.after(0, lambda: self._update_models_ui([self._tr("offline_model")], False, silent=silent))
 
         threading.Thread(target=task, daemon=True).start()
@@ -3104,6 +4133,7 @@ class LLMTranslateApp(ctk.CTk):
     def _update_models_ui(self, names, online, silent=False):
         self._is_online = online
         self._sync_server_button_visibility()
+        self._sync_vram_button_visibility()
         if online:
             self._available_models = list(names)
             clean_cur = strip_loaded_prefix(self.model_id)
@@ -3126,7 +4156,52 @@ class LLMTranslateApp(ctk.CTk):
             if not silent:
                 self._stop_status_anim(self._tr("server_failed"), "#ef4444", 0.0)
 
+    def load_selected_model_to_vram(self):
+        if self._is_loading_model or not self._is_online or not self._is_valid_model_selected():
+            return
+        target_model = strip_loaded_prefix(self.model_id)
+        if target_model in self._loaded_vram_models:
+            self._sync_vram_button_visibility()
+            return
+
+        self._is_loading_model = True
+        self.btn_load_model.configure(state="disabled")
+        self._start_status_anim(f"{self._tr('loading_vram')}: {target_model[:18]}", "#eab308", "#eab308")
+
+        def task():
+            try:
+                if self._loaded_vram_models:
+                    self._verified_unload_all_vram(timeout_per_step=8)
+                self._run_lms_cmd(["load", target_model, "-y"], timeout=45)
+                loaded_now = self._query_lms_ps_loaded_models()
+                if target_model not in loaded_now:
+                    try:
+                        self.client.chat.completions.create(
+                            model=target_model,
+                            messages=[{"role": "user", "content": "ok"}],
+                            max_tokens=1,
+                            stream=False
+                        )
+                        loaded_now.add(target_model)
+                    except Exception:
+                        pass
+                self._loaded_vram_models = loaded_now if loaded_now else {target_model}
+                self.after(0, self._refresh_model_dropdown_labels)
+                self.after(0, lambda: self._stop_status_anim(self._tr("model_ready"), "#22c55e", 1.0))
+                if self.chk_auto.get() and self.t_in.get("0.0", "end-1c").strip():
+                    self.after(0, self._force_trigger)
+            finally:
+                self._is_loading_model = False
+                self.after(0, lambda: self.btn_load_model.configure(state="normal"))
+
+        threading.Thread(target=task, daemon=True).start()    
+
     def unload_vram(self):
+        if not self._loaded_vram_models:
+            self._sync_vram_button_visibility()
+            self._stop_status_anim(self._tr("vram_already_empty"), "#22c55e", 0.0)
+            return
+
         def task():
             self._abort_active_stream()
             self.after(0, lambda: self._start_status_anim(self._tr("vram_check"), "#eab308"))
@@ -3147,7 +4222,7 @@ class LLMTranslateApp(ctk.CTk):
     def _normalize_lang_name(self, raw_lang):
         if not raw_lang:
             return None
-        clean = raw_lang.strip(" <>[].,:;\"'").lower()
+        clean = strip_flag_prefix(raw_lang).strip(" <>[].,:;\"'").lower()
         if not clean or clean in INVALID_LANG_PLACEHOLDERS or "language" in clean:
             return None
         for k in TARGET_LANGUAGES_EN:
@@ -3707,6 +4782,7 @@ class LLMTranslateApp(ctk.CTk):
             return
 
         self._abort_active_stream()
+        self.stop_tts()
         current_task = self._task_id
 
         self._tw_task_id = current_task
@@ -3895,6 +4971,7 @@ class LLMTranslateApp(ctk.CTk):
                 if any(k in err_low for k in ("connection", "refused", "connecterror", "timed out", "unreachable")):
                     self._is_online = False
                     self.after(0, self._sync_server_button_visibility)
+                    self.after(0, self._sync_vram_button_visibility)
                 self.after(0, lambda: self._render_phased_output(f"{self._tr('api_err')}:\n{err_msg}", [], False))
                 self.after(0, lambda: self._stop_status_anim(self._tr("conn_err"), "#ef4444", 0.0))
             finally:
@@ -3915,12 +4992,14 @@ class LLMTranslateApp(ctk.CTk):
         self._save_config()
         self._close_all_dropdowns()
         self._abort_active_stream()
-        try:
-            self._set_status_label(self._tr("vram_exit"), "#eab308")
-            self.update_idletasks()
-        except Exception:
-            pass
-        self._verified_unload_all_vram(timeout_per_step=5)
+        self.stop_tts()
+        if self._loaded_vram_models:
+            try:
+                self._set_status_label(self._tr("vram_exit"), "#eab308")
+                self.update_idletasks()
+            except Exception:
+                pass
+            self._verified_unload_all_vram(timeout_per_step=5)
         self.destroy()
         os._exit(0)
 
