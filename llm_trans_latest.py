@@ -16,75 +16,140 @@ import difflib
 import shutil
 import json
 import re
-import tkinter as tk
-import tkinter.font as tkfont
+import html
+import math
 
 try:
     import pyperclip
 except ImportError:
     pyperclip = None
 
-try:
-    from PIL import Image, ImageDraw, ImageTk
-    HAS_PIL = True
-except ImportError:
-    HAS_PIL = False
-
-import customtkinter as ctk
 from openai import OpenAI
+
+from PySide6.QtCore import (
+    Qt, QTimer, QSize, QPoint, QRect, QRectF, Signal, QObject, QEvent, QBuffer, QIODevice,
+    QPropertyAnimation, QVariantAnimation, QEasingCurve
+)
+from PySide6.QtGui import (
+    QIcon, QPixmap, QImage, QPainter, QColor, QPen, QBrush, QFont, QFontMetrics,
+    QTextCursor, QTextCharFormat, QSyntaxHighlighter, QPainterPath
+)
+from PySide6.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
+    QLabel, QPushButton, QLineEdit, QTextEdit, QPlainTextEdit, QAbstractButton,
+    QProgressBar, QFrame, QListWidget, QListWidgetItem, QFileDialog, QMenu,
+    QSizePolicy, QAbstractItemView, QGraphicsOpacityEffect
+)
 
 IS_WIN = sys.platform == "win32"
 IS_MAC = sys.platform == "darwin"
 IS_LINUX = sys.platform.startswith("linux")
+IS_FROZEN = getattr(sys, "frozen", False)
 
-UI_FONT = "Segoe UI" if IS_WIN else ("SF Pro Display" if IS_MAC else "Sans")
-MONO_FONT = "Consolas" if IS_WIN else ("Menlo" if IS_MAC else "Monospace")
+UI_FONT = "Segoe UI" if IS_WIN else ("SF Pro Display" if IS_MAC else "Inter")
+MONO_FONT = "Consolas" if IS_WIN else ("Menlo" if IS_MAC else "JetBrains Mono")
 
 if IS_WIN:
     try:
-        kernel32 = ctypes.windll.kernel32
-        h_stdin = kernel32.GetStdHandle(-10)
-        mode = ctypes.c_uint32()
-        if kernel32.GetConsoleMode(h_stdin, ctypes.byref(mode)):
-            new_mode = (mode.value & ~0x0040) | 0x0080
-            kernel32.SetConsoleMode(h_stdin, new_mode)
-    except Exception:
-        pass
-    try:
-        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("llm.translate.app.v13")
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("llm.translate.app.v12")
     except Exception:
         pass
 
-ctk.set_appearance_mode("Dark")
-ctk.set_default_color_theme("blue")
-
-THEME = {
-    "bg_root": "#0f1117",
-    "bg_card_in": "#161922",
-    "bg_card_out": "#12151c",
-    "bg_dd": "#171b24",
-    "bg_dd_hover": "#1e2430",
-    "bg_popup": "#151821",
-    "bg_btn": "#1e232e",
-    "bg_btn_hover": "#2a3140",
-    "bg_accent": "#2563eb",
-    "bg_accent_hover": "#1d4ed8",
-    "bg_server": "#1e3a8a",
-    "bg_server_online": "#172554",
-    "bg_server_hover": "#2563eb",
-    "bg_danger": "#3f1a20",
-    "bg_danger_hover": "#7f1d1d",
-    "border_subtle": "#262b38",
-    "border_focus": "#3b82f6",
-    "text_main": "#f3f4f6",
-    "text_muted": "#9ca3af",
-    "text_dim": "#6b7280",
+THEME_PALETTES = {
+    "dark": {
+        "bg_root": "#0d0f14",
+        "bg_surface": "#13161f",
+        "bg_surface_alt": "#10131a",
+        "bg_input": "#161a24",
+        "bg_hover": "#1e2433",
+        "bg_popup": "#151923",
+        "bg_btn": "#1a1f2c",
+        "bg_btn_hover": "#242b3d",
+        "bg_btn_disabled": "#12151e",
+        "bg_accent": "#2563eb",
+        "bg_accent_hover": "#1d4ed8",
+        "bg_danger": "#3a1820",
+        "bg_danger_hover": "#6b1d2b",
+        "danger_border": "#ef4444",
+        "vision_purple": "#a855f7",
+        "border": "#222836",
+        "border_focus": "#3b82f6",
+        "text_main": "#f1f5f9",
+        "text_muted": "#94a3b8",
+        "text_dim": "#475569",
+        "code_bg": "#1e2536",
+        "code_fg": "#93c5fd",
+        "codeblock_bg": "#090b10",
+        "codeblock_fg": "#7dd3fc",
+        "scroll_handle": "#2b3245",
+        "scroll_hover": "#3d4761",
+    },
+    "amoled": {
+        "bg_root": "#000000",
+        "bg_surface": "#000000",
+        "bg_surface_alt": "#000000",
+        "bg_input": "#000000",
+        "bg_hover": "#0f1117",
+        "bg_popup": "#050507",
+        "bg_btn": "#07080b",
+        "bg_btn_hover": "#12141c",
+        "bg_btn_disabled": "#030304",
+        "bg_accent": "#2563eb",
+        "bg_accent_hover": "#1d4ed8",
+        "bg_danger": "#260b10",
+        "bg_danger_hover": "#4c121d",
+        "danger_border": "#ef4444",
+        "vision_purple": "#a855f7",
+        "border": "#181a20",
+        "border_focus": "#3b82f6",
+        "text_main": "#ffffff",
+        "text_muted": "#8e95a5",
+        "text_dim": "#3f4451",
+        "code_bg": "#0a0c12",
+        "code_fg": "#93c5fd",
+        "codeblock_bg": "#030406",
+        "codeblock_fg": "#60a5fa",
+        "scroll_handle": "#1c1f29",
+        "scroll_hover": "#2d3242",
+    },
+    "light": {
+        "bg_root": "#f3f5f9",
+        "bg_surface": "#ffffff",
+        "bg_surface_alt": "#f8fafc",
+        "bg_input": "#ffffff",
+        "bg_hover": "#eef2f7",
+        "bg_popup": "#ffffff",
+        "bg_btn": "#e8edf5",
+        "bg_btn_hover": "#dce3ef",
+        "bg_btn_disabled": "#eef1f6",
+        "bg_accent": "#2563eb",
+        "bg_accent_hover": "#1d4ed8",
+        "bg_danger": "#fee2e2",
+        "bg_danger_hover": "#fecaca",
+        "danger_border": "#dc2626",
+        "vision_purple": "#7c3aed",
+        "border": "#d5dce6",
+        "border_focus": "#2563eb",
+        "text_main": "#0f172a",
+        "text_muted": "#475569",
+        "text_dim": "#94a3b8",
+        "code_bg": "#eef2ff",
+        "code_fg": "#1d4ed8",
+        "codeblock_bg": "#f1f5f9",
+        "codeblock_fg": "#0f172a",
+        "scroll_handle": "#cbd5e1",
+        "scroll_hover": "#94a3b8",
+    }
 }
+
+THEME = dict(THEME_PALETTES["dark"])
 
 LM_HOST, LM_PORT = "127.0.0.1", 1234
 LOADED_PREFIX = "✓ "
+MODEL_SIZE_SEP = "  •  "
+SCALE_OPTIONS = [75, 90, 100, 110, 125, 150]
 
-if getattr(sys, "frozen", False):
+if IS_FROZEN:
     SCRIPT_DIR = os.path.dirname(os.path.abspath(sys.executable))
 else:
     SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -92,17 +157,38 @@ else:
 if IS_WIN:
     BASE_DIR = SCRIPT_DIR
     CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
-    ICONS_DIR = os.path.join(BASE_DIR, "icons")
+    _win_local = os.path.expandvars(r"%LOCALAPPDATA%")
+    SYS_CACHE_DIR = os.path.join(_win_local if os.path.isdir(_win_local) else tempfile.gettempdir(), "LLMTranslate", "cache")
+elif IS_MAC:
+    BASE_DIR = os.path.expanduser("~/Library/Application Support/llm-translate")
+    os.makedirs(BASE_DIR, exist_ok=True)
+    CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
+    SYS_CACHE_DIR = os.path.expanduser("~/Library/Caches/llm-translate")
 else:
-    APP_CONFIG_DIR = os.path.expanduser("~/.config/llm-translate")
-    APP_CACHE_DIR = os.path.expanduser("~/.cache/llm-translate")
-    os.makedirs(APP_CONFIG_DIR, exist_ok=True)
-    os.makedirs(APP_CACHE_DIR, exist_ok=True)
-    BASE_DIR = APP_CONFIG_DIR
-    CONFIG_PATH = os.path.join(APP_CONFIG_DIR, "config.json")
-    ICONS_DIR = os.path.join(APP_CACHE_DIR, "icons")
+    BASE_DIR = os.path.expanduser("~/.config/llm-translate")
+    os.makedirs(BASE_DIR, exist_ok=True)
+    CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
+    SYS_CACHE_DIR = os.path.expanduser("~/.cache/llm-translate")
 
-FLAGS_DIR = os.path.join(ICONS_DIR, "flags")
+FLAGS_CACHE_DIR = os.path.join(SYS_CACHE_DIR, "flags_v2")
+UI_ICONS_CACHE_DIR = os.path.join(SYS_CACHE_DIR, "ui_v2")
+os.makedirs(FLAGS_CACHE_DIR, exist_ok=True)
+os.makedirs(UI_ICONS_CACHE_DIR, exist_ok=True)
+
+CDN_UI_ICON_NAMES = {
+    "swap": "arrow-left-right",
+    "image": "image-plus",
+    "tts_play": "volume-2",
+    "tts_stop": "volume-x",
+    "play": "send-horizontal",
+    "stop": "square",
+    "refresh": "refresh-cw",
+    "server": "server",
+    "model_load": "download",
+    "vram_clean": "trash-2",
+    "settings": "settings",
+    "vision": "eye",
+}
 
 UI_STRINGS = {
     "ru": {
@@ -110,21 +196,18 @@ UI_STRINGS = {
         "tip_tts": "Озвучить перевод",
         "tip_go": "Перевести (Ctrl+Enter)",
         "tip_stop": "Остановить перевод",
-        "tip_auto_chk": "Авто. перевод при вводе текста",
+        "tip_auto_chk": "Автоперевод при вводе текста",
+        "tip_image": "Перевести текст с картинки (файл или Ctrl+V)",
+        "tip_remove_img": "Убрать картинку",
         "tip_refresh": "Обновить список моделей LM Studio",
         "tip_server": "Запустить сервер LM Studio",
-        "tip_load_model": "Загрузить модель",
+        "tip_load_model": "Загрузить модель в VRAM",
         "tip_vram": "Очистить VRAM",
         "tip_settings": "Настройки",
-        "splash_sub": "Локальный нейросетевой переводчик",
-        "splash_init": "Инициализация...",
-        "splash_env": "Подготовка графической среды...",
-        "splash_tex": "Генерация встроенных ассетов...",
-        "splash_ui": "Сборка главного окна...",
-        "splash_cfg": "Чтение конфигурации config.json...",
-        "splash_start": "Запуск приложения...",
-        "auto_detect": "Автоопределение",
-        "auto_short": "Авто",
+        "auto_ai": "Автоопределение (ИИ)",
+        "auto_fast": "Автоопределение (Быстрое)",
+        "auto_ai_short": "Авто ИИ",
+        "auto_fast_short": "Авто",
         "select_lang": "Выберите язык...",
         "select_model": "Выберите модель...",
         "no_models": "Нет моделей в LM Studio",
@@ -132,17 +215,26 @@ UI_STRINGS = {
         "loading": "Загрузка...",
         "auto_trans_chk": "Автоперевод",
         "smart_search_sw": "Умный поиск",
-        "settings_title": "Настройки приложения",
+        "settings_title": "Настройки",
         "settings_pin": "Поверх всех окон",
-        "settings_lang": "Язык программы",
+        "settings_thinking": "Режим размышлений",
+        "settings_vision_model": "Vision-модель (для картинок)",
+        "vision_auto": "Авто (самая лёгкая по размеру)",
+        "no_vision_models": "Нет Vision-моделей",
+        "settings_theme": "Тема оформления",
+        "theme_dark": "Тёмная",
+        "theme_amoled": "AMOLED",
+        "theme_light": "Светлая",
+        "settings_scale": "Масштаб интерфейса",
+        "settings_lang": "Язык интерфейса",
         "server_btn": "Сервер",
-        "instant_btn": "⚡ Ответить сразу",
+        "instant_btn": "⚡ Показать сразу",
         "connecting": "Подключение...",
         "ready": "● Готов",
         "choose_lang_right": "Выберите язык справа",
         "choose_model_bottom": "Выберите модель снизу",
         "copied": "✓ Скопировано",
-        "copied_sel": "✓ Скопировано выделенное",
+        "copied_sel": "✓ Выделенное скопировано",
         "stopped": "⏹ Остановлено",
         "tts_speaking": "🔊 Озвучивание...",
         "tts_stopped": "⏹ Озвучка остановлена",
@@ -151,40 +243,43 @@ UI_STRINGS = {
         "model_ready": "● Модель готова",
         "searching_lms": "Поиск LM Studio",
         "starting_server": "Запуск сервера LM Studio...",
-        "server_started": "● Сервер запущен!",
         "server_failed": "✕ Включи Local Server (:1234)",
         "lms_online": "● LM Studio в сети",
-        "vram_check": "Проверка и очистка VRAM",
-        "vram_cleaned_all": "✓ VRAM полностью очищена",
-        "vram_cleaned": "✓ VRAM очищена",
+        "vram_check": "Очистка VRAM",
+        "vram_cleaned_all": "✓ VRAM очищена",
+        "vram_cleaned": "✓ VRAM частично очищена",
         "vram_already_empty": "✓ VRAM уже пуста",
-        "vram_exit": "Очистка VRAM перед выходом...",
+        "vram_exit": "Очистка VRAM...",
         "unloading": "Выгрузка",
         "loading_vram": "Загрузка в VRAM",
-        "translating": "ИИ переводит",
-        "thinking": "ИИ размышляет",
-        "typing": "Печатает",
-        "polishing": "Отполировка текста",
+        "translating": "Перевод",
+        "thinking": "Размышление",
+        "typing": "Генерация",
+        "polishing": "Отполировка",
         "done": "● Готово",
         "conn_err": "✕ Ошибка связи",
         "api_err": "Ошибка API",
         "dict_variants": "варианты перевода и идиомы:",
         "custom_lang_hint": "Нажмите Enter для своего языка",
         "no_matches": "Нет совпадений",
-        "ctx_paste_cur": "Вставить в курсор (Ctrl+V)",
+        "ctx_paste_cur": "Вставить (Ctrl+V)",
         "ctx_paste_rep": "Вставить с заменой",
+        "ctx_paste_img": "Вставить картинку из буфера",
+        "ctx_open_img": "Открыть картинку из файла...",
+        "img_translating": "Распознавание и перевод картинки",
+        "no_vision_err": "✕ Нет Vision-модели в LM Studio!",
         "ctx_copy": "Копировать (Ctrl+C)",
         "ctx_cut": "Вырезать (Ctrl+X)",
         "ctx_sel_all": "Выделить всё (Ctrl+A)",
-        "ctx_bold": "Сделать **Жирным**",
-        "ctx_italic": "Сделать *Курсивом*",
-        "ctx_code": "Сделать `Монолитом`",
-        "ctx_strike": "Сделать ~~Зачёркнутым~~",
+        "ctx_bold": "Жирный (**...**)",
+        "ctx_italic": "Курсив (*...*)",
+        "ctx_code": "Код (`...`)",
+        "ctx_strike": "Зачёркнутый (~~...~~)",
         "ctx_clear": "Очистить всё",
         "ctx_copy_sel": "Копировать выделенное (Ctrl+C)",
         "ctx_copy_all": "Копировать весь перевод",
         "warn_prefix": "⚠ Неверный язык:",
-        "mismatch_warn": "⚠ Неверный язык: выбран «{src}», но это «{det}»! (Вот перевод с «{det}»):",
+        "mismatch_warn": "⚠ Неверный язык: выбран «{src}», но это «{det}»! (Перевод с «{det}»):",
         "mismatch_status": "⚠ Это {det}, а не {src}!"
     },
     "en": {
@@ -193,32 +288,38 @@ UI_STRINGS = {
         "tip_go": "Translate (Ctrl+Enter)",
         "tip_stop": "Stop translation",
         "tip_auto_chk": "Auto-translate while typing",
+        "tip_image": "Translate text from image (file or Ctrl+V)",
+        "tip_remove_img": "Remove image",
         "tip_refresh": "Refresh LM Studio models",
         "tip_server": "Start LM Studio server",
-        "tip_load_model": "Load model",
+        "tip_load_model": "Load model into VRAM",
         "tip_vram": "Clear VRAM",
         "tip_settings": "Settings",
-        "splash_sub": "Local Neural Machine Translator",
-        "splash_init": "Initializing...",
-        "splash_env": "Preparing graphics environment...",
-        "splash_tex": "Building embedded UI assets...",
-        "splash_ui": "Assembling main window...",
-        "splash_cfg": "Reading config.json...",
-        "splash_start": "Launching application...",
-        "auto_detect": "Auto Detect",
-        "auto_short": "Auto Detect",
+        "auto_ai": "Auto Detect (AI)",
+        "auto_fast": "Auto Detect (Fast)",
+        "auto_ai_short": "Auto AI",
+        "auto_fast_short": "Auto",
         "select_lang": "Select language...",
         "select_model": "Select model...",
         "no_models": "No models in LM Studio",
         "offline_model": "LM Studio Offline",
         "loading": "Loading...",
         "auto_trans_chk": "Auto-translate",
-        "smart_search_sw": "Smart Search",
-        "settings_title": "Application Settings",
+        "smart_search_sw": "Smart search",
+        "settings_title": "Settings",
         "settings_pin": "Always on top",
-        "settings_lang": "App Language",
+        "settings_thinking": "Thinking mode",
+        "settings_vision_model": "Vision model (for images)",
+        "vision_auto": "Auto (smallest by size)",
+        "no_vision_models": "No Vision models",
+        "settings_theme": "Theme",
+        "theme_dark": "Dark",
+        "theme_amoled": "AMOLED",
+        "theme_light": "Light",
+        "settings_scale": "UI scale",
+        "settings_lang": "Interface language",
         "server_btn": "Server",
-        "instant_btn": "⚡ Instant Answer",
+        "instant_btn": "⚡ Show instantly",
         "connecting": "Connecting...",
         "ready": "● Ready",
         "choose_lang_right": "Select target language",
@@ -233,35 +334,38 @@ UI_STRINGS = {
         "model_ready": "● Model ready",
         "searching_lms": "Searching LM Studio",
         "starting_server": "Starting LM Studio server...",
-        "server_started": "● Server started!",
         "server_failed": "✕ Enable Local Server (:1234)",
         "lms_online": "● LM Studio Online",
-        "vram_check": "Checking & clearing VRAM",
-        "vram_cleaned_all": "✓ VRAM completely cleared",
-        "vram_cleaned": "✓ VRAM cleared",
+        "vram_check": "Clearing VRAM",
+        "vram_cleaned_all": "✓ VRAM cleared",
+        "vram_cleaned": "✓ VRAM partially cleared",
         "vram_already_empty": "✓ VRAM already empty",
-        "vram_exit": "Clearing VRAM before exit...",
+        "vram_exit": "Clearing VRAM...",
         "unloading": "Unloading",
         "loading_vram": "Loading into VRAM",
-        "translating": "AI translating",
-        "thinking": "AI thinking",
-        "typing": "Typing",
-        "polishing": "Polishing translation",
+        "translating": "Translating",
+        "thinking": "Thinking",
+        "typing": "Generating",
+        "polishing": "Polishing",
         "done": "● Done",
         "conn_err": "✕ Connection error",
         "api_err": "API Error",
         "dict_variants": "translations & idioms:",
         "custom_lang_hint": "Press Enter for custom language",
         "no_matches": "No matches",
-        "ctx_paste_cur": "Paste at cursor (Ctrl+V)",
+        "ctx_paste_cur": "Paste (Ctrl+V)",
         "ctx_paste_rep": "Paste & replace all",
+        "ctx_paste_img": "Paste image from clipboard",
+        "ctx_open_img": "Open image file...",
+        "img_translating": "Reading & translating image",
+        "no_vision_err": "✕ No Vision model in LM Studio!",
         "ctx_copy": "Copy (Ctrl+C)",
         "ctx_cut": "Cut (Ctrl+X)",
         "ctx_sel_all": "Select All (Ctrl+A)",
-        "ctx_bold": "Make **Bold**",
-        "ctx_italic": "Make *Italic*",
-        "ctx_code": "Make `Inline Code`",
-        "ctx_strike": "Make ~~Strikethrough~~",
+        "ctx_bold": "Bold (**...**)",
+        "ctx_italic": "Italic (*...*)",
+        "ctx_code": "Code (`...`)",
+        "ctx_strike": "Strikethrough (~~...~~)",
         "ctx_clear": "Clear All",
         "ctx_copy_sel": "Copy selection (Ctrl+C)",
         "ctx_copy_all": "Copy full translation",
@@ -276,20 +380,23 @@ ALL_MODEL_PLACEHOLDERS = {
     UI_STRINGS["ru"]["select_model"], UI_STRINGS["en"]["select_model"],
     UI_STRINGS["ru"]["no_models"], UI_STRINGS["en"]["no_models"],
     UI_STRINGS["ru"]["offline_model"], UI_STRINGS["en"]["offline_model"],
-    UI_STRINGS["ru"]["loading"], UI_STRINGS["en"]["loading"]
+    UI_STRINGS["ru"]["loading"], UI_STRINGS["en"]["loading"],
+    UI_STRINGS["ru"]["vision_auto"], UI_STRINGS["en"]["vision_auto"],
+    UI_STRINGS["ru"]["no_vision_models"], UI_STRINGS["en"]["no_vision_models"],
 }
 
 LANG_ISO_MAP = {
-    "Auto Detect": "globe", "Russian": "ru", "English": "gb", "German": "de",
+    "Auto AI": "badge_ai", "Auto Fast": "badge_fast",
+    "Russian": "ru", "English": "gb", "German": "de",
     "French": "fr", "Spanish": "es", "Italian": "it", "Portuguese": "pt",
     "Chinese (Simplified)": "cn", "Chinese (Traditional)": "tw", "Japanese": "jp",
     "Korean": "kr", "Ukrainian": "ua", "Belarusian": "by", "Kazakh": "kz",
     "Uzbek": "uz", "Kyrgyz": "kg", "Tajik": "tj", "Turkmen": "tm",
     "Azerbaijani": "az", "Armenian": "am", "Georgian": "ge", "Turkish": "tr",
     "Arabic": "sa", "Hebrew": "il", "Persian": "ir", "Hindi": "in",
-    "Bengali": "bd", "Urdu": "pk", "Punjabi": "in", "Tamil": "in",
-    "Telugu": "in", "Marathi": "in", "Gujarati": "in", "Kannada": "in",
-    "Malayalam": "in", "Sinhala": "lk", "Nepali": "np", "Thai": "th",
+    "Bengali": "bd", "Urdu": "pk", "Punjabi": "reg-pa", "Tamil": "reg-ta",
+    "Telugu": "reg-te", "Marathi": "reg-mr", "Gujarati": "reg-gu", "Kannada": "reg-kn",
+    "Malayalam": "reg-ml", "Sinhala": "lk", "Nepali": "np", "Thai": "th",
     "Vietnamese": "vn", "Indonesian": "id", "Malay": "my", "Tagalog": "ph",
     "Burmese": "mm", "Khmer": "kh", "Lao": "la", "Mongolian": "mn",
     "Polish": "pl", "Czech": "cz", "Slovak": "sk", "Hungarian": "hu",
@@ -298,18 +405,19 @@ LANG_ISO_MAP = {
     "Greek": "gr", "Lithuanian": "lt", "Latvian": "lv", "Estonian": "ee",
     "Dutch": "nl", "Swedish": "se", "Norwegian": "no", "Danish": "dk",
     "Finnish": "fi", "Icelandic": "is", "Irish": "ie", "Welsh": "gb-wls",
-    "Scottish Gaelic": "gb-sct", "Basque": "es", "Catalan": "es",
-    "Galician": "es", "Maltese": "mt", "Luxembourgish": "lu", "Afrikaans": "za",
-    "Swahili": "ke", "Amharic": "et", "Yoruba": "ng", "Igbo": "ng",
-    "Hausa": "ng", "Zulu": "za", "Xhosa": "za", "Somali": "so",
-    "Malagasy": "mg", "Kurdish": "iq", "Pashto": "af", "Tatar": "ru",
-    "Bashkir": "ru", "Chuvash": "ru", "Chechen": "ru", "Ossetian": "ru",
-    "Yakut": "ru", "Buryat": "ru", "Udmurt": "ru", "Komi": "ru",
-    "Mari": "ru", "Mordvin": "ru", "Yiddish": "il", "Latin": "va",
-    "Ancient Greek": "gr", "Old Church Slavonic": "ru", "Sanskrit": "in",
-    "Esperanto": "globe", "Interlingua": "globe", "Toki Pona": "globe",
-    "Maori": "nz", "Hawaiian": "us", "Samoan": "ws", "Cebuano": "ph",
-    "Javanese": "id", "Sundanese": "id", "Haitian Creole": "ht",
+    "Scottish Gaelic": "gb-sct", "Basque": "reg-eu", "Catalan": "reg-ca",
+    "Galician": "reg-gl", "Maltese": "mt", "Luxembourgish": "lu", "Afrikaans": "za",
+    "Swahili": "ke", "Amharic": "et", "Yoruba": "ng", "Igbo": "reg-ig",
+    "Hausa": "ne", "Zulu": "reg-zu", "Xhosa": "reg-xh", "Somali": "so",
+    "Malagasy": "mg", "Kurdish": "reg-ku", "Pashto": "af",
+    "Tatar": "reg-tt", "Bashkir": "reg-ba", "Chuvash": "reg-cv", "Chechen": "reg-ce",
+    "Ossetian": "reg-os", "Yakut": "reg-sah", "Buryat": "reg-bua", "Udmurt": "reg-udm",
+    "Komi": "reg-kv", "Mari": "reg-chm", "Mordvin": "reg-myv",
+    "Yiddish": "reg-yi", "Latin": "va",
+    "Ancient Greek": "reg-grc", "Old Church Slavonic": "reg-cu", "Sanskrit": "reg-sa",
+    "Esperanto": "reg-eo", "Interlingua": "reg-ia", "Toki Pona": "reg-tok",
+    "Maori": "nz", "Hawaiian": "reg-haw", "Samoan": "ws", "Cebuano": "reg-ceb",
+    "Javanese": "reg-jv", "Sundanese": "reg-su", "Haitian Creole": "ht",
     "Guarani": "py", "Quechua": "pe",
 }
 
@@ -340,7 +448,8 @@ TTS_BCP47_MAP = {
 }
 
 LANG_DATA = {
-    "Auto Detect": ("Автоопределение", "auto авто определить автоматически обнаружение"),
+    "Auto AI": ("Автоопределение (ИИ)", "auto ai ии нейросеть автоопределение"),
+    "Auto Fast": ("Автоопределение (Быстрое)", "auto fast быстрое автоопределение символ"),
     "Russian": ("Русский", "ru русский раша"),
     "English": ("Английский", "en английский инглиш"),
     "German": ("Немецкий", "de немецкий дойч германский"),
@@ -459,6 +568,8 @@ LANG_DATA = {
     "Quechua": ("Кечуа", "qu кечуа"),
 }
 
+AUTO_MODES_CANON = {"Auto AI", "Auto Fast"}
+
 RE_LEADING_FLAG_OR_ISO = re.compile(
     r"^(?:[\U0001F1E6-\U0001F1FF]{2}|[\U0001F300-\U0001FAFF\u2600-\u27BF]+|[A-Z]{2}\s+(?=[A-ZА-ЯЁ]))\s*"
 )
@@ -477,7 +588,7 @@ for en, data in LANG_DATA.items():
     LANG_MAP[data[0]] = LANG_MAP[en]
 
 WORLD_LANGUAGES_EN = list(LANG_DATA.keys())
-TARGET_LANGUAGES_EN = [l for l in WORLD_LANGUAGES_EN if l != "Auto Detect"]
+TARGET_LANGUAGES_EN = [l for l in WORLD_LANGUAGES_EN if l not in AUTO_MODES_CANON]
 
 POS_CANONICAL_PAIRS = [
     ("причастие / предикатив", "participle / predicative"),
@@ -579,11 +690,6 @@ RE_UNCLOSED_THINK = re.compile(
     r"(?:<think>|<thought>|◁think▷).*$",
     flags=re.DOTALL | re.IGNORECASE
 )
-RE_CYR_LAT_MIXED_WORD = re.compile(
-    r"\b(?:[а-яА-ЯёЁ]+[a-zA-Z\u00C0-\u024F]+[а-яА-ЯёЁa-zA-Z\u00C0-\u024F]*|"
-    r"[a-zA-Z\u00C0-\u024F]+[а-яА-ЯёЁ]+[а-яА-ЯёЁa-zA-Z\u00C0-\u024F]*)\b"
-)
-RE_LATIN_WORDS = re.compile(r"\b[a-zA-Z\u00C0-\u024F]{2,}\b")
 RE_CYRILLIC_CHARS = re.compile(r"[а-яА-ЯёЁ]")
 RE_EMOJI_CHARS = re.compile(r"[\U0001F300-\U0001FAFF\u2600-\u27BF]+")
 
@@ -604,11 +710,6 @@ INVALID_LANG_PLACEHOLDERS = {
     "sourcelanguageinenglish"
 }
 
-ALLOWED_LATIN_ACRONYMS = {
-    "ai", "agi", "llm", "llms", "rnn", "rnns", "lstm", "lstms", "gpu", "cpu",
-    "vram", "ram", "api", "sdk", "ui", "ux", "id", "url", "http", "https", "json"
-}
-
 LAYOUT_RU_TO_EN = str.maketrans(
     "йцукенгшщзхъфывапролджэячсмитьбю",
     "qwertyuiop[]asdfghjkl;'zxcvbnm,."
@@ -619,9 +720,67 @@ PHONETIC_RU_TO_EN = {
     "айя": "aya", "ая": "aya", "евро": "euro", "вихрь": "vikhr"
 }
 
-ICON_NAMES = ("swap", "tts_play", "tts_stop", "play", "stop", "refresh", "vram_clean", "model_load", "server", "settings")
-CDN_ICON_URLS = {}
-_FONT_CACHE = {}
+
+def fast_detect_language_by_script(text):
+    if not text:
+        return None
+    sample = re.sub(r"[`*_~#\d\s\W_]+", " ", text).strip()[:240]
+    if not sample:
+        return None
+
+    for ch in sample:
+        cp = ord(ch)
+        if 0x3040 <= cp <= 0x30FF:
+            return "Japanese"
+        if 0xAC00 <= cp <= 0xD7AF or 0x1100 <= cp <= 0x11FF:
+            return "Korean"
+        if 0x4E00 <= cp <= 0x9FFF:
+            return "Chinese (Simplified)"
+        if 0x0600 <= cp <= 0x06FF:
+            return "Arabic"
+        if 0x0590 <= cp <= 0x05FF:
+            return "Hebrew"
+        if 0x0900 <= cp <= 0x097F:
+            return "Hindi"
+        if 0x0E00 <= cp <= 0x0E7F:
+            return "Thai"
+        if 0x0370 <= cp <= 0x03FF:
+            return "Greek"
+        if 0x0530 <= cp <= 0x058F:
+            return "Armenian"
+        if 0x10A0 <= cp <= 0x10FF:
+            return "Georgian"
+
+    cyr_chars = re.findall(r"[а-яА-ЯёЁіїєґўқғңүұһәө]", sample)
+    if cyr_chars:
+        s_low = sample.lower()
+        if any(c in s_low for c in ("і", "ї", "є", "ґ")):
+            return "Ukrainian"
+        if "ў" in s_low:
+            return "Belarusian"
+        if any(c in s_low for c in ("қ", "ғ", "ң", "ү", "ұ", "һ", "ә")):
+            return "Kazakh"
+        return "Russian"
+
+    words = set(re.findall(r"[a-zA-Z\u00C0-\u024F]+", sample.lower()))
+    if not words:
+        return None
+
+    latin_scores = {
+        "Latin": len(words & {"et", "in", "non", "est", "cum", "ad", "per", "sed", "autem", "erat", "deus", "terra", "caelum", "quod", "qui", "quae", "hoc", "ipse", "lux", "fiat"}),
+        "German": len(words & {"der", "die", "das", "und", "ist", "nicht", "ich", "ein", "eine", "auf", "für", "mit", "zu", "den", "von"}) + (2 if re.search(r"[äöüß]", sample.lower()) else 0),
+        "French": len(words & {"le", "la", "les", "des", "est", "dans", "pour", "pas", "que", "une", "avec", "sur", "je", "nous", "vous"}) + (2 if re.search(r"[àâçéèêëîïôùûüÿœ]", sample.lower()) else 0),
+        "Spanish": len(words & {"el", "la", "los", "las", "de", "que", "en", "por", "para", "con", "una", "es", "como", "pero", "yo"}) + (2 if re.search(r"[ñ¿¡áéíóú]", sample.lower()) else 0),
+        "Italian": len(words & {"il", "lo", "gli", "che", "non", "per", "sono", "una", "con", "anche", "questo", "alla", "della"}),
+        "Portuguese": len(words & {"os", "as", "não", "com", "uma", "para", "por", "mais", "como", "você", "isso"}) + (2 if re.search(r"[ãõçêô]", sample.lower()) else 0),
+        "Polish": len(words & {"nie", "się", "jest", "jak", "ale", "czy", "już", "tylko", "bardzo"}) + (2 if re.search(r"[ąćęłńóśźż]", sample.lower()) else 0),
+        "Turkish": len(words & {"bir", "ve", "bu", "için", "ile", "değil", "ama", "çok"}) + (2 if re.search(r"[ğışİöüç]", sample.lower()) else 0),
+        "English": len(words & {"the", "and", "is", "are", "to", "of", "in", "that", "for", "with", "you", "this", "from", "have", "not", "it", "was"}),
+    }
+    best_lang, best_sc = max(latin_scores.items(), key=lambda kv: kv[1])
+    if best_sc >= 1:
+        return best_lang
+    return "English"
 
 
 def transliterate_en_to_ru_phonetic(text):
@@ -657,7 +816,6 @@ def get_win_short_path(path):
 
 
 def resource_path(relative_path):
-    """Ищет ресурс внутри PyInstaller _MEIPASS, затем в папке скрипта, затем в конфиге/кэше."""
     meipass = getattr(sys, "_MEIPASS", None)
     if meipass:
         cand = os.path.join(meipass, relative_path)
@@ -669,456 +827,39 @@ def resource_path(relative_path):
     return os.path.join(BASE_DIR, relative_path)
 
 
-def _draw_procedural_flag(iso_code, w=40, h=28):
-    """Генерирует иконку флага прямо в памяти (RAM) — не требует внешних файлов или сети."""
-    if not HAS_PIL:
-        return None
-    img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-    d = ImageDraw.Draw(img)
+def find_user_asset(subpath_no_ext):
+    """Ищет пользовательскую картинку в icons/<subpath>.(png|svg) рядом со скриптом или внутри PyInstaller bundle."""
+    for ext in (".png", ".svg"):
+        rel = os.path.join("icons", subpath_no_ext + ext)
+        p = resource_path(rel)
+        if os.path.isfile(p) and os.path.getsize(p) > 32:
+            return p
+    return None
 
-    if iso_code == "globe":
-        d.rounded_rectangle([0, 0, w - 1, h - 1], radius=4, fill="#1e3a8a", outline="#3b82f6", width=1)
-        cx, cy, r = w // 2, h // 2, min(w, h) // 2 - 4
-        d.ellipse([cx - r, cy - r, cx + r, cy + r], outline="#93c5fd", width=2)
-        d.ellipse([cx - r // 2, cy - r, cx + r // 2, cy + r], outline="#93c5fd", width=1)
-        d.line([(cx - r, cy), (cx + r, cy)], fill="#93c5fd", width=1)
-        return img
-
-    horiz_3 = {
-        "ru": ("#ffffff", "#0039a6", "#d52b1e"),
-        "de": ("#000000", "#dd0000", "#ffce00"),
-        "nl": ("#ae1c28", "#ffffff", "#21468b"),
-        "bg": ("#ffffff", "#00966e", "#d62612"),
-        "hu": ("#ce2939", "#ffffff", "#477050"),
-        "lt": ("#fdb913", "#006a44", "#c1272d"),
-        "ee": ("#0072ce", "#000000", "#ffffff"),
-        "am": ("#d90012", "#0033a0", "#f2a800"),
-        "az": ("#00b5e2", "#ef3340", "#509e2f"),
-        "rs": ("#c6363c", "#0c4076", "#ffffff"),
-        "hr": ("#ff0000", "#ffffff", "#171796"),
-        "si": ("#ffffff", "#005ce6", "#ff0000"),
-        "sk": ("#ffffff", "#0b4ea2", "#ee1c25"),
-        "lu": ("#ed2939", "#ffffff", "#00a1de"),
-    }
-    vert_3 = {
-        "fr": ("#002395", "#ffffff", "#ed2939"),
-        "it": ("#009246", "#ffffff", "#ce2b37"),
-        "ro": ("#002b7f", "#fcd116", "#ce1126"),
-        "ie": ("#169b62", "#ffffff", "#ff883e"),
-        "ng": ("#008751", "#ffffff", "#008751"),
-    }
-    horiz_2 = {
-        "ua": ("#0057b7", "#ffd700"),
-        "pl": ("#ffffff", "#dc143c"),
-        "id": ("#ff0000", "#ffffff"),
-    }
-
-    if iso_code in horiz_3:
-        c1, c2, c3 = horiz_3[iso_code]
-        d.rectangle([0, 0, w, h // 3], fill=c1)
-        d.rectangle([0, h // 3, w, (2 * h) // 3], fill=c2)
-        d.rectangle([0, (2 * h) // 3, w, h], fill=c3)
-    elif iso_code in vert_3:
-        c1, c2, c3 = vert_3[iso_code]
-        d.rectangle([0, 0, w // 3, h], fill=c1)
-        d.rectangle([w // 3, 0, (2 * w) // 3, h], fill=c2)
-        d.rectangle([(2 * w) // 3, 0, w, h], fill=c3)
-    elif iso_code in horiz_2:
-        c1, c2 = horiz_2[iso_code]
-        d.rectangle([0, 0, w, h // 2], fill=c1)
-        d.rectangle([0, h // 2, w, h], fill=c2)
-    elif iso_code in ("gb", "gb-wls", "gb-sct"):
-        d.rectangle([0, 0, w, h], fill="#012169")
-        d.line([(0, 0), (w, h)], fill="#ffffff", width=5)
-        d.line([(0, h), (w, 0)], fill="#ffffff", width=5)
-        d.line([(0, 0), (w, h)], fill="#c8102e", width=2)
-        d.line([(0, h), (w, 0)], fill="#c8102e", width=2)
-        d.rectangle([0, h // 2 - 4, w, h // 2 + 4], fill="#ffffff")
-        d.rectangle([w // 2 - 4, 0, w // 2 + 4, h], fill="#ffffff")
-        d.rectangle([0, h // 2 - 2, w, h // 2 + 2], fill="#c8102e")
-        d.rectangle([w // 2 - 2, 0, w // 2 + 2, h], fill="#c8102e")
-    elif iso_code == "us":
-        d.rectangle([0, 0, w, h], fill="#b22234")
-        for y in range(2, h, 4):
-            d.rectangle([0, y, w, y + 1], fill="#ffffff")
-        d.rectangle([0, 0, w // 2, h // 2], fill="#3c3b6e")
-    elif iso_code == "es":
-        d.rectangle([0, 0, w, h], fill="#aa151b")
-        d.rectangle([0, h // 4, w, (3 * h) // 4], fill="#f1bf00")
-    elif iso_code == "pt":
-        d.rectangle([0, 0, (2 * w) // 5, h], fill="#006600")
-        d.rectangle([(2 * w) // 5, 0, w, h], fill="#ff0000")
-        d.ellipse([(2 * w) // 5 - 4, h // 2 - 4, (2 * w) // 5 + 4, h // 2 + 4], fill="#ffcc00")
-    elif iso_code == "jp":
-        d.rectangle([0, 0, w, h], fill="#ffffff")
-        r = h // 3
-        d.ellipse([w // 2 - r, h // 2 - r, w // 2 + r, h // 2 + r], fill="#bc002d")
-    elif iso_code in ("cn", "vn"):
-        d.rectangle([0, 0, w, h], fill="#de2910")
-        d.ellipse([6, 6, 16, 16], fill="#ffde00")
-    elif iso_code == "kr":
-        d.rectangle([0, 0, w, h], fill="#ffffff")
-        r = h // 4
-        d.ellipse([w // 2 - r, h // 2 - r, w // 2 + r, h // 2 + r], fill="#cd2e3a")
-    elif iso_code == "by":
-        d.rectangle([0, 0, w, (2 * h) // 3], fill="#c8313e")
-        d.rectangle([0, (2 * h) // 3, w, h], fill="#4aa657")
-        d.rectangle([0, 0, 5, h], fill="#ffffff")
-    elif iso_code == "kz":
-        d.rectangle([0, 0, w, h], fill="#00afca")
-        r = h // 4
-        d.ellipse([w // 2 - r, h // 2 - r, w // 2 + r, h // 2 + r], fill="#fec50c")
-    elif iso_code == "tr":
-        d.rectangle([0, 0, w, h], fill="#e30a17")
-        d.ellipse([w // 3 - 5, h // 2 - 6, w // 3 + 7, h // 2 + 6], fill="#ffffff")
-        d.ellipse([w // 3 - 2, h // 2 - 5, w // 3 + 8, h // 2 + 5], fill="#e30a17")
-    elif iso_code in ("se", "fi", "no", "dk", "is"):
-        colors = {
-            "se": ("#006aa7", "#fecc02"),
-            "fi": ("#ffffff", "#003580"),
-            "no": ("#ba0c2f", "#00205b"),
-            "dk": ("#c8102e", "#ffffff"),
-            "is": ("#02529c", "#dc1e35"),
-        }
-        bg_c, cr_c = colors[iso_code]
-        d.rectangle([0, 0, w, h], fill=bg_c)
-        d.rectangle([w // 3 - 2, 0, w // 3 + 3, h], fill=cr_c)
-        d.rectangle([0, h // 2 - 2, w, h // 2 + 3], fill=cr_c)
-    else:
-        palette = ["#1d4ed8", "#047857", "#b91c1c", "#7e22ce", "#0f766e", "#b45309", "#374151"]
-        col = palette[sum(ord(c) for c in iso_code) % len(palette)]
-        d.rectangle([0, 0, w, h], fill=col)
-        d.rectangle([0, h - 5, w, h], fill="#ffffff")
-
-    d.rectangle([0, 0, w - 1, h - 1], outline="#323846", width=1)
-    return img
-
-
-def _draw_fallback_icon(name, size=192):
-    """Генерирует векторную иконку кнопки прямо в памяти (RAM), если нет сети и кэша."""
-    if not HAS_PIL:
-        return None
-    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    d = ImageDraw.Draw(img)
-    c = (255, 255, 255, 255)
-    w = max(int(size * 0.1), 12)
-
-    if name == "swap":
-        y1 = int(size * 0.34)
-        d.line([(int(size * 0.18), y1), (int(size * 0.82), y1)], fill=c, width=w)
-        d.polygon([(int(size * 0.85), y1), (int(size * 0.62), y1 - int(size * 0.18)), (int(size * 0.62), y1 + int(size * 0.18))], fill=c)
-        y2 = int(size * 0.66)
-        d.line([(int(size * 0.18), y2), (int(size * 0.82), y2)], fill=c, width=w)
-        d.polygon([(int(size * 0.15), y2), (int(size * 0.38), y2 - int(size * 0.18)), (int(size * 0.38), y2 + int(size * 0.18))], fill=c)
-
-    elif name in ("tts_play", "tts_stop"):
-        spk = [
-            (int(size * 0.18), int(size * 0.38)),
-            (int(size * 0.34), int(size * 0.38)),
-            (int(size * 0.54), int(size * 0.20)),
-            (int(size * 0.54), int(size * 0.80)),
-            (int(size * 0.34), int(size * 0.62)),
-            (int(size * 0.18), int(size * 0.62)),
-        ]
-        d.polygon(spk, fill=c)
-        if name == "tts_play":
-            d.arc([int(size * 0.42), int(size * 0.28), int(size * 0.74), int(size * 0.72)], start=-55, end=55, fill=c, width=max(w - 4, 8))
-            d.arc([int(size * 0.34), int(size * 0.16), int(size * 0.88), int(size * 0.84)], start=-55, end=55, fill=c, width=max(w - 4, 8))
-        else:
-            d.line([(int(size * 0.62), int(size * 0.34)), (int(size * 0.86), int(size * 0.66))], fill=c, width=max(w - 2, 10))
-            d.line([(int(size * 0.86), int(size * 0.34)), (int(size * 0.62), int(size * 0.66))], fill=c, width=max(w - 2, 10))
-
-    elif name == "play":
-        pts = [(int(size * 0.40), int(size * 0.30)), (int(size * 0.70), int(size * 0.60)), (int(size * 0.40), int(size * 0.80))]
-        d.line(pts, fill=c, width=int(w * 1.35), joint="curve")
-
-    elif name == "stop":
-        d.ellipse([int(size * 0.14), int(size * 0.14), int(size * 0.86), int(size * 0.86)], outline=c, width=w)
-        d.rounded_rectangle([int(size * 0.35), int(size * 0.35), int(size * 0.65), int(size * 0.65)], radius=8, fill=c)
-
-    elif name == "refresh":
-        bbox = [int(size * 0.18), int(size * 0.18), int(size * 0.82), int(size * 0.82)]
-        d.arc(bbox, start=35, end=315, fill=c, width=w)
-        d.polygon([(int(size * 0.84), int(size * 0.18)), (int(size * 0.86), int(size * 0.46)), (int(size * 0.58), int(size * 0.38))], fill=c)
-
-    elif name == "vram_clean":
-        # Иконка веника / метлы для очистки VRAM
-        d.line([(int(size * 0.78), int(size * 0.14)), (int(size * 0.46), int(size * 0.46))], fill=c, width=max(w - 2, 12))
-        collar = [
-            (int(size * 0.36), int(size * 0.42)),
-            (int(size * 0.58), int(size * 0.64)),
-            (int(size * 0.52), int(size * 0.70)),
-            (int(size * 0.30), int(size * 0.48)),
-        ]
-        d.polygon(collar, fill=c)
-        bristles = [
-            (int(size * 0.30), int(size * 0.48)),
-            (int(size * 0.52), int(size * 0.70)),
-            (int(size * 0.34), int(size * 0.88)),
-            (int(size * 0.12), int(size * 0.66)),
-        ]
-        d.polygon(bristles, fill=c)
-        d.line([(int(size * 0.22), int(size * 0.76)), (int(size * 0.35), int(size * 0.63))], fill=(0, 0, 0, 0), width=6)
-        d.line([(int(size * 0.28), int(size * 0.82)), (int(size * 0.41), int(size * 0.69))], fill=(0, 0, 0, 0), width=6)
-
-    elif name == "model_load":
-        # Стрелка загрузки вниз в лоток
-        cx = size // 2
-        d.line([(cx, int(size * 0.15)), (cx, int(size * 0.62))], fill=c, width=w)
-        d.polygon([
-            (cx, int(size * 0.72)),
-            (int(size * 0.26), int(size * 0.46)),
-            (int(size * 0.74), int(size * 0.46))
-        ], fill=c)
-        tray_y = int(size * 0.84)
-        d.line([(int(size * 0.18), int(size * 0.66)), (int(size * 0.18), tray_y)], fill=c, width=max(w - 2, 10))
-        d.line([(int(size * 0.18), tray_y), (int(size * 0.82), tray_y)], fill=c, width=max(w - 2, 10))
-        d.line([(int(size * 0.82), tray_y), (int(size * 0.82), int(size * 0.66))], fill=c, width=max(w - 2, 10))
-
-    elif name == "server":
-        d.rounded_rectangle([int(size * 0.18), int(size * 0.20), int(size * 0.82), int(size * 0.46)], radius=10, outline=c, width=w)
-        d.rounded_rectangle([int(size * 0.18), int(size * 0.54), int(size * 0.82), int(size * 0.80)], radius=10, outline=c, width=w)
-        d.ellipse([int(size * 0.28), int(size * 0.29), int(size * 0.36), int(size * 0.37)], fill=c)
-        d.ellipse([int(size * 0.28), int(size * 0.63), int(size * 0.36), int(size * 0.71)], fill=c)
-
-    elif name == "settings":
-        d.ellipse([int(size * 0.26), int(size * 0.26), int(size * 0.74), int(size * 0.74)], outline=c, width=w)
-        d.ellipse([int(size * 0.42), int(size * 0.42), int(size * 0.58), int(size * 0.58)], fill=c)
-        d.line([(int(size * 0.50), int(size * 0.12)), (int(size * 0.50), int(size * 0.26))], fill=c, width=w)
-        d.line([(int(size * 0.50), int(size * 0.74)), (int(size * 0.50), int(size * 0.88))], fill=c, width=w)
-        d.line([(int(size * 0.12), int(size * 0.50)), (int(size * 0.26), int(size * 0.50))], fill=c, width=w)
-        d.line([(int(size * 0.74), int(size * 0.50)), (int(size * 0.88), int(size * 0.50))], fill=c, width=w)
-
-    return img.resize((64, 64), Image.Resampling.LANCZOS)
-
-
-def ensure_cached_icons(splash=None):
-    """
-    Загружает иконки из вшитых ресурсов (_MEIPASS/icons) или папки icons/.
-    Для новых иконок (vram_clean, model_load) при отсутствии на диске пробует скачать PNG с CDN,
-    сохраняя в кэш, либо мгновенно рисует векторный фоллбэк в RAM.
-    """
-    if not HAS_PIL:
-        return {}
-    loaded = {}
-    total = len(ICON_NAMES)
-    for idx, name in enumerate(ICON_NAMES, start=1):
-        pct = 10 + int((idx / total) * 35)
-        if splash:
-            splash.set_progress(pct, f"Loading icon {name} ({idx}/{total})...")
-
-        pil_img = None
-        local_cache_file = os.path.join(ICONS_DIR, f"{name}.png")
-        for cand_path in (resource_path(os.path.join("icons", f"{name}.png")), local_cache_file):
-            if os.path.isfile(cand_path) and os.path.getsize(cand_path) > 100:
-                try:
-                    pil_img = Image.open(cand_path).convert("RGBA")
-                    break
-                except Exception:
-                    pass
-
-        if pil_img is None and name in CDN_ICON_URLS:
-            try:
-                os.makedirs(ICONS_DIR, exist_ok=True)
-                req = urllib.request.Request(CDN_ICON_URLS[name], headers={"User-Agent": "Mozilla/5.0"})
-                with urllib.request.urlopen(req, timeout=1.8) as resp:
-                    raw_bytes = resp.read()
-                if raw_bytes and len(raw_bytes) > 150:
-                    with open(local_cache_file, "wb") as f:
-                        f.write(raw_bytes)
-                    pil_img = Image.open(local_cache_file).convert("RGBA")
-            except Exception:
-                pil_img = None
-
-        if pil_img is None:
-            pil_img = _draw_fallback_icon(name)
-
-        loaded[name] = pil_img
-    return loaded
-
-
-def ensure_cached_flags(splash=None):
-    """
-    Загружает флаги стран из вшитых ресурсов .exe (_MEIPASS/icons/flags),
-    либо из локальной папки icons/flags/, либо мгновенно рисует их в оперативной памяти.
-    """
-    if not HAS_PIL:
-        return {}
-    unique_codes = sorted(set(LANG_ISO_MAP.values()))
-    loaded_pil = {}
-
-    if splash:
-        splash.set_progress(55, "Building embedded flag icons...")
-
-    for code in unique_codes:
-        pil_img = None
-        if code != "globe":
-            for cand_path in (
-                resource_path(os.path.join("icons", "flags", f"{code}.png")),
-                os.path.join(FLAGS_DIR, f"{code}.png")
-            ):
-                if os.path.isfile(cand_path) and os.path.getsize(cand_path) > 60:
-                    try:
-                        pil_img = Image.open(cand_path).convert("RGBA").resize((40, 28), Image.Resampling.LANCZOS)
-                        break
-                    except Exception:
-                        pass
-        if pil_img is None:
-            pil_img = _draw_procedural_flag(code, 40, 28)
-        if pil_img is not None:
-            loaded_pil[code] = pil_img
-
-    return loaded_pil
-
-
-def get_tkfont_for_widget(tk_widget, fallback_family=UI_FONT, fallback_size=-13, fallback_weight="bold"):
-    try:
-        font_spec = tk_widget.cget("font")
-        if font_spec:
-            key = str(font_spec)
-            f = _FONT_CACHE.get(key)
-            if f is None:
-                f = tkfont.Font(root=tk_widget, font=font_spec)
-                _FONT_CACHE[key] = f
-            return f
-    except Exception:
-        pass
-
-    key = (fallback_family, fallback_size, fallback_weight)
-    f = _FONT_CACHE.get(key)
-    if f is None:
-        try:
-            f = tkfont.Font(family=fallback_family, size=fallback_size, weight=fallback_weight)
-            _FONT_CACHE[key] = f
-        except Exception:
-            return None
-    return f
-
-
-def truncate_text_with_font(text, max_phys_px, tk_font_obj=None, fallback_char_px=8):
-    if not text or max_phys_px <= 20:
-        return text
-    if tk_font_obj is not None:
-        try:
-            if tk_font_obj.measure(text) <= max_phys_px:
-                return text
-            ell = "..."
-            ell_w = tk_font_obj.measure(ell)
-            target_w = max_phys_px - ell_w
-            if target_w <= 8:
-                return ell
-            lo, hi = 1, len(text)
-            best = 1
-            while lo <= hi:
-                mid = (lo + hi) // 2
-                if tk_font_obj.measure(text[:mid]) <= target_w:
-                    best = mid
-                    lo = mid + 1
-                else:
-                    hi = mid - 1
-            return text[:best].rstrip() + ell
-        except Exception:
-            pass
-
-    max_chars = max(4, int(max_phys_px // max(fallback_char_px, 5)))
-    if len(text) <= max_chars:
-        return text
-    return text[: max(1, max_chars - 3)].rstrip() + "..."
-
-
-class HoverTooltip:
-    def __init__(self, widget, text_provider, delay_ms=500):
-        self.widget = widget
-        self.text_provider = text_provider
-        self.delay_ms = delay_ms
-        self.tip_win = None
-        self._after_id = None
-
-        # Привязываем события ко всем под-виджетам CustomTkinter (canvas, entry, label)
-        targets = [widget]
-        for attr in ("_canvas", "_label", "_entry"):
-            sub = getattr(widget, attr, None)
-            if sub is not None and sub not in targets:
-                targets.append(sub)
-
-        for t in targets:
-            try:
-                t.bind("<Enter>", self._on_enter, add="+")
-                t.bind("<Leave>", self._on_leave, add="+")
-                t.bind("<ButtonPress>", self._on_leave, add="+")
-            except Exception:
-                pass
-
-    def _on_enter(self, event=None):
-        self._cancel()
-        self._after_id = self.widget.after(self.delay_ms, self._show)
-
-    def _on_leave(self, event=None):
-        self._cancel()
-        self._hide()
-
-    def _cancel(self):
-        if self._after_id is not None:
-            try:
-                self.widget.after_cancel(self._after_id)
-            except Exception:
-                pass
-            self._after_id = None
-
-    def _show(self):
-        try:
-            full_text = self.text_provider() if callable(self.text_provider) else str(self.text_provider)
-            if not full_text:
-                return
-            self._hide()
-            self.tip_win = tk.Toplevel(self.widget)
-            self.tip_win.withdraw()
-            self.tip_win.overrideredirect(True)
-            self.tip_win.attributes("-topmost", True)
-            if IS_LINUX:
-                try:
-                    self.tip_win.wm_attributes("-type", "tooltip")
-                except Exception:
-                    pass
-            self.tip_win.configure(bg=THEME["border_focus"], padx=1, pady=1)
-            lbl = tk.Label(
-                self.tip_win,
-                text=full_text,
-                font=(UI_FONT, 10),
-                bg=THEME["bg_popup"],
-                fg=THEME["text_main"],
-                padx=8,
-                pady=4
-            )
-            lbl.pack()
-            self.tip_win.update_idletasks()
-
-            tw = self.tip_win.winfo_reqwidth()
-            th = self.tip_win.winfo_reqheight()
-            wx = self.widget.winfo_rootx()
-            wy = self.widget.winfo_rooty()
-            wh = self.widget.winfo_height()
-            sw = self.widget.winfo_screenwidth()
-
-            x = min(max(6, wx), max(6, sw - tw - 8))
-            y = wy - th - 6 if wy - th - 6 > 8 else wy + wh + 6
-            self.tip_win.geometry(f"{tw}x{th}+{x}+{y}")
-            self.tip_win.deiconify()
-        except Exception:
-            self._hide()
-
-    def _hide(self):
-        if self.tip_win is not None:
-            try:
-                self.tip_win.destroy()
-            except Exception:
-                pass
-            self.tip_win = None
 
 def strip_loaded_prefix(val):
     if not val:
         return ""
-    return val[len(LOADED_PREFIX):].strip() if val.startswith(LOADED_PREFIX) else val.strip()
+    s = val.strip()
+    if s.startswith(LOADED_PREFIX):
+        s = s[len(LOADED_PREFIX):].strip()
+    if MODEL_SIZE_SEP in s:
+        s = s.split(MODEL_SIZE_SEP, 1)[0].strip()
+    return s
+
+
+def format_bytes_size(size_bytes):
+    try:
+        b = float(size_bytes)
+    except (TypeError, ValueError):
+        return ""
+    if b <= 0:
+        return ""
+    gb = b / (1024 ** 3)
+    if gb >= 1.0:
+        return f"{gb:.1f} GB"
+    mb = b / (1024 ** 2)
+    return f"{max(1, int(round(mb)))} MB"
 
 
 def resolve_lms_executable():
@@ -1130,6 +871,7 @@ def resolve_lms_executable():
         os.path.expanduser(r"~\.lmstudio\bin\lms.exe"),
         os.path.expandvars(r"%LOCALAPPDATA%\LM-Studio\app\bin\lms.exe"),
         os.path.expandvars(r"%LOCALAPPDATA%\Programs\LM Studio\resources\app\.webpack\lms.exe"),
+        "/Applications/LM Studio.app/Contents/Resources/app/.webpack/lms",
         "/opt/LM Studio/resources/app/.webpack/lms",
         "/usr/local/bin/lms",
     ]
@@ -1180,88 +922,637 @@ LMS_BIN = resolve_lms_executable()
 LM_STUDIO_GUI_EXE = resolve_lm_studio_gui_exe()
 
 
-class GUISplashScreen:
-    def __init__(self, parent, subtitle_text="Локальный нейросетевой переводчик", init_text="Инициализация..."):
-        self.win = tk.Toplevel(parent)
-        self.win.overrideredirect(True)
-        self.win.attributes("-topmost", True)
-        if IS_LINUX:
-            try:
-                self.win.wm_attributes("-type", "splash")
-            except Exception:
-                pass
-        self.win.configure(bg=THEME["border_focus"], padx=1, pady=1)
+def blend_colors(c1_hex, c2_hex, t):
+    t = max(0.0, min(1.0, float(t)))
+    c1 = QColor(c1_hex)
+    c2 = QColor(c2_hex)
+    r = int(round(c1.red() + (c2.red() - c1.red()) * t))
+    g = int(round(c1.green() + (c2.green() - c1.green()) * t))
+    b = int(round(c1.blue() + (c2.blue() - c1.blue()) * t))
+    return QColor(r, g, b)
 
-        w, h = 450, 195
-        sw = self.win.winfo_screenwidth()
-        sh = self.win.winfo_screenheight()
-        x = max(0, (sw - w) // 2)
-        y = max(0, (sh - h) // 2)
-        self.win.geometry(f"{w}x{h}+{x}+{y}")
 
-        inner = tk.Frame(self.win, bg=THEME["bg_root"], bd=0, highlightthickness=0)
-        inner.pack(fill="both", expand=True)
+class AnimatedToggleSwitch(QAbstractButton):
+    def __init__(self, text="", parent=None):
+        super().__init__(parent)
+        self.setText(text)
+        self.setCheckable(True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFont(QFont(UI_FONT, 10))
+        self._thumb_pos = 0.0
+        self._hover_level = 0.0
 
-        header_frame = tk.Frame(inner, bg=THEME["bg_root"])
-        header_frame.pack(fill="x", padx=24, pady=(26, 4))
+        self._anim_pos = QVariantAnimation(self)
+        self._anim_pos.setDuration(170)
+        self._anim_pos.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._anim_pos.valueChanged.connect(self._on_pos_changed)
 
-        badge = tk.Canvas(header_frame, width=36, height=36, bg=THEME["bg_root"], highlightthickness=0)
-        badge.pack(side="left", padx=(0, 12))
-        badge.create_oval(2, 2, 34, 34, fill="#1d4ed8", outline="#3b82f6", width=2)
-        badge.create_text(18, 18, text="AI", fill="#ffffff", font=(UI_FONT, 11, "bold"))
+        self._anim_hover = QVariantAnimation(self)
+        self._anim_hover.setDuration(130)
+        self._anim_hover.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._anim_hover.valueChanged.connect(self._on_hover_changed)
 
-        title_box = tk.Frame(header_frame, bg=THEME["bg_root"])
-        title_box.pack(side="left", fill="x")
-        tk.Label(
-            title_box, text="LLM TRANSLATE", font=(UI_FONT, 16, "bold"),
-            fg="#ffffff", bg=THEME["bg_root"], anchor="w"
-        ).pack(fill="x")
-        tk.Label(
-            title_box, text=subtitle_text, font=(UI_FONT, 9),
-            fg=THEME["text_muted"], bg=THEME["bg_root"], anchor="w"
-        ).pack(fill="x")
+        self.toggled.connect(self._start_toggle_anim)
 
-        info_frame = tk.Frame(inner, bg=THEME["bg_root"])
-        info_frame.pack(fill="x", padx=24, pady=(24, 6))
+    def _on_pos_changed(self, val):
+        self._thumb_pos = float(val)
+        self.update()
 
-        self.lbl_task = tk.Label(
-            info_frame, text=init_text, font=(UI_FONT, 10),
-            fg="#d4d4d8", bg=THEME["bg_root"], anchor="w"
-        )
-        self.lbl_task.pack(side="left", fill="x", expand=True)
+    def _on_hover_changed(self, val):
+        self._hover_level = float(val)
+        self.update()
 
-        self.lbl_pct = tk.Label(
-            info_frame, text="0%", font=(UI_FONT, 10, "bold"),
-            fg="#3b82f6", bg=THEME["bg_root"], anchor="e"
-        )
-        self.lbl_pct.pack(side="right")
+    def _start_toggle_anim(self, checked):
+        self._anim_pos.stop()
+        self._anim_pos.setStartValue(self._thumb_pos)
+        self._anim_pos.setEndValue(1.0 if checked else 0.0)
+        self._anim_pos.start()
 
-        self.bar_w = w - 50
-        self.bar_canvas = tk.Canvas(
-            inner, width=self.bar_w, height=8, bg="#222634",
-            bd=0, highlightthickness=0
-        )
-        self.bar_canvas.pack(padx=24, pady=(2, 16))
-        self.bar_fill_rect = self.bar_canvas.create_rectangle(0, 0, 0, 8, fill="#3b82f6", width=0)
+    def setChecked(self, checked):
+        super().setChecked(checked)
+        if not self._anim_pos.state():
+            self._thumb_pos = 1.0 if checked else 0.0
+            self.update()
 
-        self.win.update()
+    def enterEvent(self, event):
+        self._anim_hover.stop()
+        self._anim_hover.setStartValue(self._hover_level)
+        self._anim_hover.setEndValue(1.0)
+        self._anim_hover.start()
+        super().enterEvent(event)
 
-    def set_progress(self, percent, status_text):
+    def leaveEvent(self, event):
+        self._anim_hover.stop()
+        self._anim_hover.setStartValue(self._hover_level)
+        self._anim_hover.setEndValue(0.0)
+        self._anim_hover.start()
+        super().leaveEvent(event)
+
+    def sizeHint(self):
+        fm = QFontMetrics(self.font())
+        txt_w = fm.horizontalAdvance(self.text()) if self.text() else 0
+        h = max(22, fm.height() + 6)
+        w = 36 + (8 + txt_w if txt_w > 0 else 0) + 6
+        return QSize(w, h)
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+        sw_w, sw_h = 34.0, 18.0
+        y_top = (self.height() - sw_h) / 2.0
+        track_rect = QRectF(1.0, y_top, sw_w, sw_h)
+
+        off_bg = blend_colors(THEME["bg_input"], THEME["bg_hover"], self._hover_level * 0.7)
+        on_bg = blend_colors(THEME["bg_accent"], THEME["bg_accent_hover"], self._hover_level * 0.6)
+        track_col = blend_colors(off_bg.name(), on_bg.name(), self._thumb_pos)
+
+        border_off = blend_colors(THEME["border"], THEME["border_focus"], self._hover_level * 0.75)
+        border_col = blend_colors(border_off.name(), THEME["bg_accent"], self._thumb_pos)
+
+        p.setBrush(track_col)
+        p.setPen(QPen(border_col, 1.1))
+        p.drawRoundedRect(track_rect, sw_h / 2.0, sw_h / 2.0)
+
+        pad = 2.5
+        d = sw_h - pad * 2.0
+        x_min = track_rect.left() + pad
+        x_max = track_rect.right() - pad - d
+        cx = x_min + (x_max - x_min) * self._thumb_pos
+        thumb_rect = QRectF(cx, y_top + pad, d, d)
+
+        thumb_off = QColor(THEME["text_muted"]) if self._hover_level < 0.5 else QColor(THEME["text_main"])
+        thumb_col = blend_colors(thumb_off.name(), "#ffffff", self._thumb_pos)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(thumb_col)
+        p.drawEllipse(thumb_rect)
+
+        if self.text():
+            txt_col = blend_colors(THEME["text_main"], THEME["border_focus"], self._hover_level * 0.25)
+            p.setPen(txt_col)
+            p.setFont(self.font())
+            txt_rect = QRectF(sw_w + 9.0, 0.0, self.width() - sw_w - 9.0, float(self.height()))
+            p.drawText(txt_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, self.text())
+
+        p.end()
+
+
+class AnimatedPillButton(QPushButton):
+    def __init__(self, text="", parent=None):
+        super().__init__(text, parent)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._active_val = 0.0
+        self._hover_val = 0.0
+        self._is_active = False
+
+        self._anim_act = QVariantAnimation(self)
+        self._anim_act.setDuration(180)
+        self._anim_act.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._anim_act.valueChanged.connect(self._on_act_changed)
+
+        self._anim_hov = QVariantAnimation(self)
+        self._anim_hov.setDuration(130)
+        self._anim_hov.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._anim_hov.valueChanged.connect(self._on_hov_changed)
+
+    def _on_act_changed(self, v):
+        self._active_val = float(v)
+        self.update()
+
+    def _on_hov_changed(self, v):
+        self._hover_val = float(v)
+        self.update()
+
+    def set_active_animated(self, active):
+        self._is_active = bool(active)
+        self._anim_act.stop()
+        self._anim_act.setStartValue(self._active_val)
+        self._anim_act.setEndValue(1.0 if active else 0.0)
+        self._anim_act.start()
+
+    def sync_active_immediate(self, active):
+        self._is_active = bool(active)
+        self._active_val = 1.0 if active else 0.0
+        self.update()
+
+    def enterEvent(self, event):
+        self._anim_hov.stop()
+        self._anim_hov.setStartValue(self._hover_val)
+        self._anim_hov.setEndValue(1.0)
+        self._anim_hov.start()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self._anim_hov.stop()
+        self._anim_hov.setStartValue(self._hover_val)
+        self._anim_hov.setEndValue(0.0)
+        self._anim_hov.start()
+        super().leaveEvent(event)
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+        rect = QRectF(0.5, 0.5, self.width() - 1.0, self.height() - 1.0)
+        bg_idle = blend_colors(THEME["bg_btn"], THEME["bg_btn_hover"], self._hover_val)
+        bg_act = blend_colors(THEME["bg_accent"], THEME["bg_accent_hover"], self._hover_val * 0.6)
+        bg = blend_colors(bg_idle.name(), bg_act.name(), self._active_val)
+
+        brd_idle = blend_colors(THEME["border"], THEME["border_focus"], self._hover_val)
+        brd = blend_colors(brd_idle.name(), THEME["bg_accent"], self._active_val)
+
+        p.setBrush(bg)
+        p.setPen(QPen(brd, 1.0))
+        p.drawRoundedRect(rect, 6.0, 6.0)
+
+        txt_col = blend_colors(THEME["text_main"], "#ffffff", self._active_val)
+        p.setPen(txt_col)
+        p.setFont(self.font())
+
+        ico = self.icon()
+        if not ico.isNull():
+            isz = self.iconSize()
+            fm = QFontMetrics(self.font())
+            tw = fm.horizontalAdvance(self.text())
+            total_w = isz.width() + 5 + tw
+            sx = (self.width() - total_w) / 2.0
+            iy = (self.height() - isz.height()) / 2.0
+            ico.paint(p, int(sx), int(iy), isz.width(), isz.height())
+            p.drawText(QRectF(sx + isz.width() + 5, 0, tw + 4, self.height()), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, self.text())
+        else:
+            p.drawText(rect, Qt.AlignmentFlag.AlignCenter, self.text())
+
+        p.end()
+
+
+def _tint_pixmap(src_pm, color_hex, size):
+    dpr = 2
+    px = size * dpr
+    out = QPixmap(px, px)
+    out.setDevicePixelRatio(dpr)
+    out.fill(Qt.GlobalColor.transparent)
+
+    p = QPainter(out)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+    p.drawPixmap(QRect(0, 0, size, size), src_pm)
+    p.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
+    p.fillRect(out.rect(), QColor(color_hex))
+    p.end()
+    return QIcon(out)
+
+
+def create_vector_qicon(name, color_hex="#f1f5f9", size=20):
+    user_file = find_user_asset(name)
+    if user_file:
+        pm = QPixmap(user_file)
+        if not pm.isNull():
+            if user_file.lower().endswith(".svg"):
+                return _tint_pixmap(pm, color_hex, size)
+            return QIcon(pm)
+
+    cdn_svg = os.path.join(UI_ICONS_CACHE_DIR, f"{name}.svg")
+    if os.path.isfile(cdn_svg) and os.path.getsize(cdn_svg) > 32:
+        pm = QPixmap(cdn_svg)
+        if not pm.isNull():
+            return _tint_pixmap(pm, color_hex, size)
+
+    dpr = 2
+    px = size * dpr
+    pm = QPixmap(px, px)
+    pm.setDevicePixelRatio(dpr)
+    pm.fill(Qt.GlobalColor.transparent)
+
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    pen = QPen(QColor(color_hex))
+    pen.setWidthF(1.65)
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+    p.setPen(pen)
+    p.setBrush(Qt.BrushStyle.NoBrush)
+
+    s = float(size)
+    if name == "swap":
+        p.drawLine(QPoint(int(s * 0.22), int(s * 0.34)), QPoint(int(s * 0.78), int(s * 0.34)))
+        p.drawLine(QPoint(int(s * 0.62), int(s * 0.21)), QPoint(int(s * 0.78), int(s * 0.34)))
+        p.drawLine(QPoint(int(s * 0.22), int(s * 0.66)), QPoint(int(s * 0.78), int(s * 0.66)))
+        p.drawLine(QPoint(int(s * 0.38), int(s * 0.79)), QPoint(int(s * 0.22), int(s * 0.66)))
+    elif name in ("tts_play", "tts_stop"):
+        p.drawPolygon([
+            QPoint(int(s * 0.16), int(s * 0.39)), QPoint(int(s * 0.33), int(s * 0.39)),
+            QPoint(int(s * 0.52), int(s * 0.23)), QPoint(int(s * 0.52), int(s * 0.77)),
+            QPoint(int(s * 0.33), int(s * 0.61)), QPoint(int(s * 0.16), int(s * 0.61)),
+        ])
+    elif name == "play":
+        p.drawLine(int(s * 0.38), int(s * 0.24), int(s * 0.68), int(s * 0.50))
+        p.drawLine(int(s * 0.68), int(s * 0.50), int(s * 0.38), int(s * 0.76))
+    elif name == "stop":
+        p.setBrush(QBrush(QColor(color_hex)))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.drawRoundedRect(QRectF(s * 0.27, s * 0.27, s * 0.46, s * 0.46), 3.0, 3.0)
+    elif name == "refresh":
+        p.drawArc(int(s * 0.20), int(s * 0.20), int(s * 0.60), int(s * 0.60), 35 * 16, 285 * 16)
+    elif name == "vram_clean":
+        p.drawRect(QRectF(s * 0.26, s * 0.30, s * 0.48, s * 0.52))
+    elif name == "model_load":
+        cx = int(s * 0.50)
+        p.drawLine(cx, int(s * 0.18), cx, int(s * 0.65))
+        p.drawLine(int(s * 0.31), int(s * 0.47), cx, int(s * 0.65))
+        p.drawLine(int(s * 0.69), int(s * 0.47), cx, int(s * 0.65))
+    elif name == "server":
+        p.drawRoundedRect(QRectF(s * 0.18, s * 0.21, s * 0.64, s * 0.23), 3.0, 3.0)
+        p.drawRoundedRect(QRectF(s * 0.18, s * 0.56, s * 0.64, s * 0.23), 3.0, 3.0)
+    elif name == "settings":
+        p.drawEllipse(QRectF(s * 0.30, s * 0.30, s * 0.40, s * 0.40))
+    elif name == "image":
+        p.drawRoundedRect(QRectF(s * 0.16, s * 0.22, s * 0.68, s * 0.56), 3.0, 3.0)
+    elif name == "vision":
+        p.drawEllipse(QRectF(s * 0.20, s * 0.32, s * 0.60, s * 0.36))
+        p.drawEllipse(QRectF(s * 0.40, s * 0.40, s * 0.20, s * 0.20))
+
+    p.end()
+    return QIcon(pm)
+
+
+def _apply_rounded_flag_mask(src_pm, w=22, h=15):
+    dpr = 2.0
+    pw, ph = int(w * dpr), int(h * dpr)
+    out = QPixmap(pw, ph)
+    out.setDevicePixelRatio(dpr)
+    out.fill(Qt.GlobalColor.transparent)
+
+    p = QPainter(out)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+
+    clip = QPainterPath()
+    clip.addRoundedRect(QRectF(0.0, 0.0, float(w), float(h)), 2.5, 2.5)
+    p.setClipPath(clip)
+    p.drawPixmap(QRect(0, 0, w, h), src_pm)
+
+    p.setClipping(False)
+    p.setBrush(Qt.BrushStyle.NoBrush)
+    p.setPen(QPen(QColor(255, 255, 255, 50), 1.0))
+    p.drawRoundedRect(QRectF(0.5, 0.5, w - 1.0, h - 1.0), 2.5, 2.5)
+    p.end()
+    return out
+
+
+def create_flag_pixmap(iso_code, w=22, h=15):
+    user_flag = find_user_asset(os.path.join("flags", iso_code))
+    if user_flag:
+        raw_pm = QPixmap(user_flag)
+        if not raw_pm.isNull():
+            return _apply_rounded_flag_mask(raw_pm, w, h)
+
+    if not iso_code.startswith("badge_") and not iso_code.startswith("reg-"):
+        for ext in ("png", "svg"):
+            cached_file = os.path.join(FLAGS_CACHE_DIR, f"{iso_code}.{ext}")
+            if os.path.isfile(cached_file) and os.path.getsize(cached_file) > 64:
+                raw_pm = QPixmap(cached_file)
+                if not raw_pm.isNull():
+                    return _apply_rounded_flag_mask(raw_pm, w, h)
+
+    dpr = 2.0
+    pw, ph = int(w * dpr), int(h * dpr)
+    pm = QPixmap(pw, ph)
+    pm.setDevicePixelRatio(dpr)
+    pm.fill(Qt.GlobalColor.transparent)
+
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+    clip = QPainterPath()
+    clip.addRoundedRect(QRectF(0.0, 0.0, float(w), float(h)), 2.5, 2.5)
+    p.setClipPath(clip)
+
+    if iso_code == "badge_ai":
+        p.fillRect(0, 0, w, h, QColor("#2e1065"))
+        p.setPen(QColor("#e9d5ff"))
+        p.setFont(QFont(UI_FONT, 7, QFont.Weight.Bold))
+        p.drawText(QRectF(0, 0, w, h), Qt.AlignmentFlag.AlignCenter, "AI")
+        p.setClipping(False)
+        p.setPen(QPen(QColor("#a855f7"), 1.0))
+        p.drawRoundedRect(QRectF(0.5, 0.5, w - 1.0, h - 1.0), 2.5, 2.5)
+        p.end()
+        return pm
+
+    if iso_code == "badge_fast":
+        p.fillRect(0, 0, w, h, QColor("#172554"))
+        p.setPen(QColor("#bfdbfe"))
+        p.setFont(QFont(UI_FONT, 6, QFont.Weight.Bold))
+        p.drawText(QRectF(0, 0, w, h), Qt.AlignmentFlag.AlignCenter, "ABC")
+        p.setClipping(False)
+        p.setPen(QPen(QColor("#3b82f6"), 1.0))
+        p.drawRoundedRect(QRectF(0.5, 0.5, w - 1.0, h - 1.0), 2.5, 2.5)
+        p.end()
+        return pm
+
+    p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+    p.setPen(Qt.PenStyle.NoPen)
+
+    if iso_code == "reg-tt":
+        p.fillRect(0, 0, w, 6, QColor("#008000"))
+        p.fillRect(0, 6, w, 3, QColor("#ffffff"))
+        p.fillRect(0, 9, w, h - 9, QColor("#cc0000"))
+    elif iso_code == "reg-ba":
+        p.fillRect(0, 0, w, 5, QColor("#0072ce"))
+        p.fillRect(0, 5, w, 5, QColor("#ffffff"))
+        p.fillRect(0, 10, w, h - 10, QColor("#009639"))
+        p.setBrush(QColor("#ffcc00"))
+        p.drawEllipse(w // 2 - 2, 5, 4, 4)
+    elif iso_code == "reg-cv":
+        p.fillRect(0, 0, w, h, QColor("#ffdf00"))
+        p.fillRect(0, 10, w, h - 10, QColor("#a50021"))
+        p.setBrush(QColor("#a50021"))
+        p.drawPolygon([QPoint(w // 2, 3), QPoint(w // 2 + 4, 9), QPoint(w // 2 - 4, 9)])
+    elif iso_code == "reg-ce":
+        p.fillRect(0, 0, w, 8, QColor("#008000"))
+        p.fillRect(0, 8, w, 2, QColor("#ffffff"))
+        p.fillRect(0, 10, w, h - 10, QColor("#cc0000"))
+        p.fillRect(0, 0, 3, h, QColor("#ffffff"))
+    elif iso_code == "reg-os":
+        p.fillRect(0, 0, w, 5, QColor("#ffffff"))
+        p.fillRect(0, 5, w, 5, QColor("#ff0000"))
+        p.fillRect(0, 10, w, h - 10, QColor("#ffdf00"))
+    elif iso_code == "reg-sah":
+        p.fillRect(0, 0, w, 10, QColor("#00a3e0"))
+        p.fillRect(0, 10, w, 2, QColor("#ffffff"))
+        p.fillRect(0, 12, w, 1, QColor("#cc0000"))
+        p.fillRect(0, 13, w, h - 13, QColor("#008000"))
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        p.setBrush(QColor("#ffffff"))
+        p.drawEllipse(w // 2 - 3, 2, 6, 6)
+    elif iso_code == "reg-bua":
+        p.fillRect(0, 0, w, 7, QColor("#005bbb"))
+        p.fillRect(0, 7, w, 4, QColor("#ffffff"))
+        p.fillRect(0, 11, w, h - 11, QColor("#ffd500"))
+    elif iso_code == "reg-udm":
+        p.fillRect(0, 0, 7, h, QColor("#000000"))
+        p.fillRect(7, 0, 8, h, QColor("#ffffff"))
+        p.fillRect(15, 0, w - 15, h, QColor("#cc0000"))
+        p.fillRect(w // 2 - 1, 4, 2, 7, QColor("#cc0000"))
+        p.fillRect(w // 2 - 3, 6, 6, 2, QColor("#cc0000"))
+    elif iso_code == "reg-kv":
+        p.fillRect(0, 0, w, 5, QColor("#0039a6"))
+        p.fillRect(0, 5, w, 5, QColor("#009639"))
+        p.fillRect(0, 10, w, h - 10, QColor("#ffffff"))
+    elif iso_code == "reg-chm":
+        p.fillRect(0, 0, w, 5, QColor("#0039a6"))
+        p.fillRect(0, 5, w, 5, QColor("#ffffff"))
+        p.fillRect(0, 10, w, h - 10, QColor("#cc0000"))
+    elif iso_code == "reg-myv":
+        p.fillRect(0, 0, w, 5, QColor("#cc0000"))
+        p.fillRect(0, 5, w, 5, QColor("#ffffff"))
+        p.fillRect(0, 10, w, h - 10, QColor("#0039a6"))
+    elif iso_code == "reg-ca":
+        p.fillRect(0, 0, w, h, QColor("#fcdd09"))
+        for y in (2, 5, 8, 11):
+            p.fillRect(0, y, w, 2, QColor("#da121a"))
+    elif iso_code == "reg-eu":
+        p.fillRect(0, 0, w, h, QColor("#d52b1e"))
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        p.setPen(QPen(QColor("#009b48"), 2.2))
+        p.drawLine(0, 0, w, h)
+        p.drawLine(0, h, w, 0)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+        p.fillRect(0, h // 2 - 1, w, 3, QColor("#ffffff"))
+        p.fillRect(w // 2 - 1, 0, 3, h, QColor("#ffffff"))
+    elif iso_code == "reg-gl":
+        p.fillRect(0, 0, w, h, QColor("#ffffff"))
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        p.setPen(QPen(QColor("#0099cc"), 2.6))
+        p.drawLine(0, 0, w, h)
+    elif iso_code == "gb-sct":
+        p.fillRect(0, 0, w, h, QColor("#005eb8"))
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        p.setPen(QPen(QColor("#ffffff"), 2.4))
+        p.drawLine(0, 0, w, h)
+        p.drawLine(0, h, w, 0)
+    elif iso_code == "gb-wls":
+        p.fillRect(0, 0, w, h // 2, QColor("#ffffff"))
+        p.fillRect(0, h // 2, w, h - h // 2, QColor("#00ab39"))
+        p.setBrush(QColor("#d30731"))
+        p.drawEllipse(w // 2 - 4, h // 2 - 3, 8, 6)
+    elif iso_code == "reg-ku":
+        p.fillRect(0, 0, w, 5, QColor("#ed2939"))
+        p.fillRect(0, 5, w, 5, QColor("#ffffff"))
+        p.fillRect(0, 10, w, h - 10, QColor("#278e43"))
+        p.setBrush(QColor("#febd11"))
+        p.drawEllipse(w // 2 - 3, h // 2 - 3, 6, 6)
+    elif iso_code == "reg-eo":
+        p.fillRect(0, 0, w, h, QColor("#009900"))
+        p.fillRect(0, 0, 8, 8, QColor("#ffffff"))
+        p.setBrush(QColor("#009900"))
+        p.drawEllipse(2, 2, 4, 4)
+    elif iso_code in ("reg-pa", "reg-ta", "reg-te", "reg-mr", "reg-gu", "reg-kn", "reg-ml", "reg-sa"):
+        accents = {
+            "reg-pa": "#1d4ed8", "reg-ta": "#dc2626", "reg-te": "#7c3aed",
+            "reg-mr": "#d97706", "reg-gu": "#059669", "reg-kn": "#b91c1c",
+            "reg-ml": "#0284c7", "reg-sa": "#9333ea"
+        }
+        p.fillRect(0, 0, w, 5, QColor("#ff9933"))
+        p.fillRect(0, 5, w, 5, QColor("#ffffff"))
+        p.fillRect(0, 10, w, h - 10, QColor("#138808"))
+        p.setBrush(QColor(accents[iso_code]))
+        p.drawEllipse(w // 2 - 2, 5, 5, 5)
+    else:
+        horiz_3 = {
+            "ru": ("#ffffff", "#0039a6", "#d52b1e"),
+            "de": ("#000000", "#dd0000", "#ffce00"),
+            "nl": ("#ae1c28", "#ffffff", "#21468b"),
+            "bg": ("#ffffff", "#00966e", "#d62612"),
+            "hu": ("#ce2939", "#ffffff", "#477050"),
+            "lt": ("#fdb913", "#006a44", "#c1272d"),
+            "ee": ("#0072ce", "#000000", "#ffffff"),
+            "am": ("#d90012", "#0033a0", "#f2a800"),
+            "az": ("#00b5e2", "#ef3340", "#509e2f"),
+            "rs": ("#c6363c", "#0c4076", "#ffffff"),
+            "hr": ("#ff0000", "#ffffff", "#171796"),
+            "si": ("#ffffff", "#005ce6", "#ff0000"),
+            "sk": ("#ffffff", "#0b4ea2", "#ee1c25"),
+            "lu": ("#ed2939", "#ffffff", "#00a1de"),
+            "in": ("#ff9933", "#ffffff", "#138808"),
+            "ir": ("#239f40", "#ffffff", "#da0000"),
+            "tj": ("#cc0000", "#ffffff", "#006600"),
+            "uz": ("#0099b5", "#ffffff", "#1eb53a"),
+            "et": ("#078930", "#fcdd09", "#da121a"),
+            "ke": ("#000000", "#bb0000", "#006600"),
+        }
+        vert_3 = {
+            "fr": ("#002395", "#ffffff", "#ed2939"),
+            "it": ("#009246", "#ffffff", "#ce2b37"),
+            "ro": ("#002b7f", "#fcd116", "#ce1126"),
+            "ie": ("#169b62", "#ffffff", "#ff883e"),
+            "ng": ("#008751", "#ffffff", "#008751"),
+            "mn": ("#c4272f", "#015197", "#c4272f"),
+            "pe": ("#d91023", "#ffffff", "#d91023"),
+            "ne": ("#e05206", "#ffffff", "#0db02b"),
+        }
+        horiz_2 = {
+            "ua": ("#0057b7", "#ffd700"),
+            "pl": ("#ffffff", "#dc143c"),
+            "id": ("#ff0000", "#ffffff"),
+            "ht": ("#00209f", "#d21034"),
+        }
+
+        if iso_code in horiz_3:
+            c1, c2, c3 = horiz_3[iso_code]
+            h1, h2 = h // 3, (2 * h) // 3
+            p.fillRect(0, 0, w, h1, QColor(c1))
+            p.fillRect(0, h1, w, h2 - h1, QColor(c2))
+            p.fillRect(0, h2, w, h - h2, QColor(c3))
+        elif iso_code in vert_3:
+            c1, c2, c3 = vert_3[iso_code]
+            w1, w2 = w // 3, (2 * w) // 3
+            p.fillRect(0, 0, w1, h, QColor(c1))
+            p.fillRect(w1, 0, w2 - w1, h, QColor(c2))
+            p.fillRect(w2, 0, w - w2, h, QColor(c3))
+        elif iso_code in horiz_2:
+            c1, c2 = horiz_2[iso_code]
+            h1 = h // 2
+            p.fillRect(0, 0, w, h1, QColor(c1))
+            p.fillRect(0, h1, w, h - h1, QColor(c2))
+        elif iso_code == "gb":
+            p.fillRect(0, 0, w, h, QColor("#012169"))
+            p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            p.setPen(QPen(QColor("#ffffff"), 2.4))
+            p.drawLine(0, 0, w, h)
+            p.drawLine(0, h, w, 0)
+            p.setPen(QPen(QColor("#c8102e"), 1.1))
+            p.drawLine(0, 0, w, h)
+            p.drawLine(0, h, w, 0)
+            p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+            p.fillRect(0, h // 2 - 2, w, 4, QColor("#ffffff"))
+            p.fillRect(w // 2 - 2, 0, 4, h, QColor("#ffffff"))
+            p.fillRect(0, h // 2 - 1, w, 2, QColor("#c8102e"))
+            p.fillRect(w // 2 - 1, 0, 2, h, QColor("#c8102e"))
+        elif iso_code == "es":
+            p.fillRect(0, 0, w, h, QColor("#aa151b"))
+            p.fillRect(0, h // 4, w, h // 2, QColor("#f1bf00"))
+        elif iso_code == "pt":
+            w1 = (2 * w) // 5
+            p.fillRect(0, 0, w1, h, QColor("#006600"))
+            p.fillRect(w1, 0, w - w1, h, QColor("#ff0000"))
+            p.setBrush(QColor("#ffcc00"))
+            p.drawEllipse(w1 - 3, h // 2 - 3, 6, 6)
+        elif iso_code == "jp":
+            p.fillRect(0, 0, w, h, QColor("#ffffff"))
+            p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            p.setBrush(QColor("#bc002d"))
+            p.drawEllipse(w // 2 - 4, h // 2 - 4, 8, 8)
+        elif iso_code in ("cn", "vn"):
+            p.fillRect(0, 0, w, h, QColor("#de2910"))
+            p.setBrush(QColor("#ffde00"))
+            p.drawEllipse(3, 3, 5, 5)
+        elif iso_code == "tw":
+            p.fillRect(0, 0, w, h, QColor("#fe0000"))
+            p.fillRect(0, 0, w // 2, h // 2, QColor("#000095"))
+            p.setBrush(QColor("#ffffff"))
+            p.drawEllipse(w // 4 - 2, h // 4 - 2, 4, 4)
+        elif iso_code == "kr":
+            p.fillRect(0, 0, w, h, QColor("#ffffff"))
+            p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            p.setBrush(QColor("#cd2e3a"))
+            p.drawEllipse(w // 2 - 4, h // 2 - 4, 8, 8)
+        elif iso_code == "by":
+            h1 = (2 * h) // 3
+            p.fillRect(0, 0, w, h1, QColor("#c8313e"))
+            p.fillRect(0, h1, w, h - h1, QColor("#4aa657"))
+            p.fillRect(0, 0, 3, h, QColor("#ffffff"))
+        elif iso_code == "kz":
+            p.fillRect(0, 0, w, h, QColor("#00afca"))
+            p.setBrush(QColor("#fec50c"))
+            p.drawEllipse(w // 2 - 3, h // 2 - 3, 6, 6)
+        elif iso_code in ("se", "fi", "no", "dk", "is"):
+            cross_pal = {
+                "se": ("#006aa7", "#fecc02"),
+                "fi": ("#ffffff", "#003580"),
+                "no": ("#ba0c2f", "#00205b"),
+                "dk": ("#c8102e", "#ffffff"),
+                "is": ("#02529c", "#dc1e35"),
+            }
+            bg_c, cr_c = cross_pal[iso_code]
+            p.fillRect(0, 0, w, h, QColor(bg_c))
+            p.fillRect(w // 3 - 1, 0, 3, h, QColor(cr_c))
+            p.fillRect(0, h // 2 - 1, w, 3, QColor(cr_c))
+        else:
+            h_val = sum((idx + 1) * ord(ch) for idx, ch in enumerate(iso_code))
+            pal = ["#1d4ed8", "#047857", "#b91c1c", "#7e22ce", "#0f766e", "#b45309", "#0284c7", "#be123c", "#15803d", "#4338ca"]
+            c1 = pal[h_val % len(pal)]
+            c2 = "#ffffff" if (h_val % 2 == 0) else "#facc15"
+            c3 = pal[(h_val * 3 + 2) % len(pal)]
+            p.fillRect(0, 0, w, 5, QColor(c1))
+            p.fillRect(0, 5, w, 5, QColor(c2))
+            p.fillRect(0, 10, w, h - 10, QColor(c3))
+
+    p.setClipping(False)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    p.setBrush(Qt.BrushStyle.NoBrush)
+    p.setPen(QPen(QColor(255, 255, 255, 50), 1.0))
+    p.drawRoundedRect(QRectF(0.5, 0.5, w - 1.0, h - 1.0), 2.5, 2.5)
+    p.end()
+    return pm
+
+
+def _fetch_first_working_url(urls, timeout=3.5):
+    for u in urls:
         try:
-            pct = max(0, min(100, int(percent)))
-            self.lbl_task.configure(text=status_text)
-            self.lbl_pct.configure(text=f"{pct}%")
-            fill_px = int((pct / 100.0) * self.bar_w)
-            self.bar_canvas.coords(self.bar_fill_rect, 0, 0, fill_px, 8)
-            self.win.update()
+            req = urllib.request.Request(
+                u,
+                headers={
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                    "Accept": "*/*"
+                }
+            )
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                data = resp.read()
+            if data and len(data) > 64:
+                return data
         except Exception:
-            pass
-
-    def close(self):
-        try:
-            self.win.destroy()
-        except Exception:
-            pass
+            continue
+    return None
 
 
 def smart_filter_items(query, items, aliases_dict):
@@ -1302,487 +1593,373 @@ def smart_filter_items(query, items, aliases_dict):
     return [x[1] for x in scored]
 
 
-class SearchableDropdown(ctk.CTkFrame):
+class MarkdownInputHighlighter(QSyntaxHighlighter):
+    def __init__(self, parent_doc):
+        super().__init__(parent_doc)
+
+    def highlightBlock(self, text):
+        if not text:
+            return
+        fmt_bold = QTextCharFormat()
+        fmt_bold.setFontWeight(QFont.Weight.Bold)
+        fmt_bold.setForeground(QColor(THEME["text_main"]))
+
+        fmt_italic = QTextCharFormat()
+        fmt_italic.setFontItalic(True)
+        fmt_italic.setForeground(QColor(THEME["text_main"]))
+
+        fmt_code = QTextCharFormat()
+        fmt_code.setFontFamilies([MONO_FONT])
+        fmt_code.setBackground(QColor(THEME["code_bg"]))
+        fmt_code.setForeground(QColor(THEME["code_fg"]))
+
+        fmt_hdr = QTextCharFormat()
+        fmt_hdr.setFontWeight(QFont.Weight.Bold)
+        fmt_hdr.setForeground(QColor(THEME["border_focus"]))
+
+        fmt_quote = QTextCharFormat()
+        fmt_quote.setFontItalic(True)
+        fmt_quote.setForeground(QColor(THEME["text_muted"]))
+
+        fmt_dim = QTextCharFormat()
+        fmt_dim.setForeground(QColor(THEME["text_dim"]))
+
+        if re.match(r"^#{1,3}\s+", text):
+            self.setFormat(0, len(text), fmt_hdr)
+            return
+        if re.match(r"^>\s+", text):
+            self.setFormat(0, len(text), fmt_quote)
+            return
+
+        for m in RE_MD_TOKEN.finditer(text):
+            st, en = m.span()
+            tok = m.group(0)
+            if tok.startswith("`"):
+                self.setFormat(st, en - st, fmt_code)
+            elif tok.startswith("**") or tok.startswith("__"):
+                self.setFormat(st, 2, fmt_dim)
+                self.setFormat(st + 2, en - st - 4, fmt_bold)
+                self.setFormat(en - 2, 2, fmt_dim)
+            elif tok.startswith("*") or tok.startswith("_"):
+                self.setFormat(st, 1, fmt_dim)
+                self.setFormat(st + 1, en - st - 2, fmt_italic)
+                self.setFormat(en - 1, 1, fmt_dim)
+
+
+class SearchableSelector(QFrame):
+    selectionChanged = Signal(str)
+
     def __init__(
-        self, master, root_window, values, default_value,
-        command=None, aliases=None, prefer_upwards=False,
-        height=34, allow_custom=True, font_size=13, flag_provider=None
+        self, root_window, values, default_value,
+        aliases=None, prefer_upwards=False, height=32,
+        allow_custom=True, editable=True, font_size=12, icon_provider=None,
+        min_popup_width=190
     ):
-        super().__init__(
-            master,
-            fg_color=THEME["bg_dd"],
-            border_color=THEME["border_subtle"],
-            border_width=1,
-            corner_radius=8,
-            height=height
-        )
+        super().__init__(root_window)
         self.root = root_window
         self.values = list(values)
         self.aliases = aliases or {}
-        self.command = command
         self.current_val = default_value
         self.prefer_upwards = prefer_upwards
         self.allow_custom = allow_custom
+        self.editable = editable
         self.font_size = font_size
-        self.flag_provider = flag_provider
+        self.icon_provider = icon_provider
+        self.min_popup_width = min_popup_width
         self._is_editing = False
-        self._popup_open = False
+        self._icon_size = QSize(22, 15)
 
-        self.dropdown_win = None
-        self.list_canvas = None
-        self.scrollbar = None
-        self._filtered_items = []
-        self._selected_idx = 0
-        self._row_h = 28
+        self.setFixedHeight(height)
+        self.setObjectName("SelectorBox")
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
 
-        self.grid_columnconfigure(0, weight=0)
-        self.grid_columnconfigure(1, weight=1)
-        self.grid_columnconfigure(2, weight=0)
-        self.grid_propagate(False)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(8, 0, 4, 0)
+        layout.setSpacing(6)
 
-        self.lbl_flag = tk.Label(
-            self,
-            bg=THEME["bg_dd"],
-            bd=0,
-            highlightthickness=0,
-            cursor="hand2"
-        )
-        if self.flag_provider is not None:
-            self.lbl_flag.grid(row=0, column=0, sticky="w", padx=(8, 2), pady=2)
-            self.lbl_flag.bind("<Button-1>", self._on_toggle_btn_click)
+        self.lbl_icon = QLabel()
+        self.lbl_icon.setFixedSize(22, 16)
+        self.lbl_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lbl_icon.setCursor(Qt.CursorShape.PointingHandCursor)
+        if self.icon_provider is None:
+            self.lbl_icon.hide()
+        layout.addWidget(self.lbl_icon)
 
-        self.entry = ctk.CTkEntry(
-            self,
-            height=height - 4,
-            font=(UI_FONT, self.font_size, "bold"),
-            fg_color="transparent",
-            border_width=0,
-            text_color=THEME["text_main"]
-        )
-        self.entry.grid(row=0, column=1, sticky="ew", padx=(4 if self.flag_provider is None else 2, 0), pady=2)
+        self.edit = QLineEdit()
+        self.edit.setFrame(False)
+        self.edit.setReadOnly(not self.editable)
+        self.edit.setFont(QFont(UI_FONT, self.font_size, QFont.Weight.DemiBold))
+        self.edit.setText(default_value)
+        self.edit.setCursorPosition(0)
+        self.edit.setCursor(Qt.CursorShape.PointingHandCursor)
+        layout.addWidget(self.edit, 1)
 
-        self.btn_arrow = ctk.CTkButton(
-            self,
-            text="▾",
-            width=22,
-            height=height - 6,
-            font=(UI_FONT, 13),
-            fg_color="transparent",
-            hover_color=THEME["bg_dd_hover"],
-            text_color=THEME["text_muted"],
-            corner_radius=6,
-            command=self._on_toggle_btn_click
-        )
-        self.btn_arrow.grid(row=0, column=2, sticky="e", padx=(0, 3), pady=2)
+        self.btn_arrow = QPushButton("▾")
+        self.btn_arrow.setFixedSize(24, height - 4)
+        self.btn_arrow.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_arrow.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.btn_arrow.clicked.connect(self._toggle_popup)
+        layout.addWidget(self.btn_arrow)
 
-        self.entry.insert(0, default_value)
+        self.popup = QFrame(self.root)
+        self.popup.setObjectName("SelectorPopup")
+        self.popup.hide()
 
-        self.entry.bind("<Button-1>", self._on_entry_click)
-        self.entry.bind("<KeyRelease>", self._on_key_release)
-        self.entry.bind("<Return>", self._on_enter)
-        self.entry.bind("<Down>", self._on_arrow_down)
-        self.entry.bind("<Up>", self._on_arrow_up)
-        self.entry.bind("<Escape>", lambda e: self.close_dropdown())
-        self.entry.bind("<MouseWheel>", self._on_entry_mousewheel)
-        self.bind("<Configure>", self._on_entry_configure, add="+")
-        self.entry.bind("<Configure>", self._on_entry_configure, add="+")
+        self._anim_geom = QPropertyAnimation(self.popup, b"geometry", self)
+        self._anim_geom.setDuration(145)
+        self._anim_geom.setEasingCurve(QEasingCurve.Type.OutCubic)
 
-        HoverTooltip(self.entry._entry, self._get_tooltip_if_truncated)
+        pop_lay = QVBoxLayout(self.popup)
+        pop_lay.setContentsMargins(1, 1, 1, 1)
+        pop_lay.setSpacing(0)
 
-    def _keep_entry_focus(self):
-        if self._is_editing and self._popup_open:
-            try:
-                self.entry._entry.focus_set()
-            except Exception:
-                pass
+        self.list_widget = QListWidget()
+        self.list_widget.setIconSize(self._icon_size)
+        self.list_widget.setSpacing(1)
+        self.list_widget.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.list_widget.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        self.list_widget.setUniformItemSizes(True)
+        self.list_widget.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.list_widget.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.list_widget.viewport().setCursor(Qt.CursorShape.PointingHandCursor)
+        self.list_widget.itemClicked.connect(self._on_item_clicked)
+        pop_lay.addWidget(self.list_widget)
 
-    def _update_header_flag(self):
-        if self.flag_provider is None:
+        if self.editable:
+            self.edit.textEdited.connect(self._on_text_edited)
+            self.edit.returnPressed.connect(self._on_enter)
+
+        self.installEventFilter(self)
+        self.lbl_icon.installEventFilter(self)
+        self.edit.installEventFilter(self)
+        self._update_icon()
+
+    def apply_scale(self, scale_factor, base_h, base_font, base_min_popup=190):
+        h = max(24, int(round(base_h * scale_factor)))
+        fs = max(8, int(round(base_font * scale_factor)))
+        iw = max(16, int(round(22 * scale_factor)))
+        ih = max(11, int(round(15 * scale_factor)))
+        self._icon_size = QSize(iw, ih)
+        self.min_popup_width = max(72, int(round(base_min_popup * scale_factor)))
+        self.setFixedHeight(h)
+        self.lbl_icon.setFixedSize(iw, ih + 1)
+        self.edit.setFont(QFont(UI_FONT, fs, QFont.Weight.DemiBold))
+        self.btn_arrow.setFixedSize(max(20, int(round(24 * scale_factor))), max(20, h - 4))
+        self.list_widget.setIconSize(self._icon_size)
+        self.list_widget.setFont(QFont(UI_FONT, max(8, fs - 1)))
+        self._update_icon()
+
+    def eventFilter(self, obj, event):
+        if not hasattr(self, "edit"):
+            return super().eventFilter(obj, event)
+        if obj in (self, self.lbl_icon, self.edit):
+            if event.type() == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
+                if not self.popup.isVisible():
+                    self._start_editing_and_open()
+                elif not self.editable:
+                    self.close_popup()
+                return (obj is not self.edit) or (not self.editable)
+            elif obj is self.edit and event.type() == QEvent.Type.KeyPress:
+                if not self._is_editing or not self.popup.isVisible():
+                    return False
+                key = event.key()
+                if key == Qt.Key.Key_Down:
+                    row = min(self.list_widget.count() - 1, self.list_widget.currentRow() + 1)
+                    self.list_widget.setCurrentRow(row)
+                    return True
+                elif key == Qt.Key.Key_Up:
+                    row = max(0, self.list_widget.currentRow() - 1)
+                    self.list_widget.setCurrentRow(row)
+                    return True
+                elif key == Qt.Key.Key_Escape:
+                    self.close_popup()
+                    return True
+            elif obj is self.edit and event.type() == QEvent.Type.FocusOut:
+                if self.popup.isVisible():
+                    self.close_popup()
+        return super().eventFilter(obj, event)
+
+    def _update_icon(self):
+        if self.icon_provider is None:
             return
-        try:
-            if self._is_editing:
-                self.lbl_flag.configure(image="")
-                if self.lbl_flag.winfo_manager():
-                    self.lbl_flag.grid_remove()
-                self.entry.grid_configure(padx=(6, 0))
-                return
-            photo = self.flag_provider(self.current_val)
-            if photo is not None:
-                if not self.lbl_flag.winfo_manager():
-                    self.lbl_flag.grid(row=0, column=0, sticky="w", padx=(8, 2), pady=2)
-                self.entry.grid_configure(padx=(2, 0))
-                self.lbl_flag.configure(image=photo)
-                self.lbl_flag._image_ref = photo
-            else:
-                self.lbl_flag.configure(image="")
-                if self.lbl_flag.winfo_manager():
-                    self.lbl_flag.grid_remove()
-                self.entry.grid_configure(padx=(6, 0))
-        except Exception:
-            pass
-
-    def _get_tooltip_if_truncated(self):
-        if self._is_editing:
-            return ""
-        shown = self.entry.get()
-        if shown.endswith("...") and shown != self.current_val:
-            return self.current_val
-        return ""
-
-    def _on_entry_configure(self, event=None):
-        if not self._is_editing:
-            self._refresh_display_text()
-
-    def _refresh_display_text(self):
-        if self._is_editing:
+        if self._is_editing and self.editable:
+            self.lbl_icon.hide()
             return
-        self._update_header_flag()
-        try:
-            tk_ent = self.entry._entry
-            phys_w = tk_ent.winfo_width()
-            if phys_w <= 24:
-                frame_w = self.winfo_width()
-                arrow_w = max(self.btn_arrow.winfo_width(), 26)
-                flag_w = 28 if self.flag_provider is not None else 0
-                phys_w = frame_w - arrow_w - flag_w - 14
-
-            if phys_w <= 24:
-                if self.entry.get() != self.current_val:
-                    self.entry.delete(0, "end")
-                    self.entry.insert(0, self.current_val)
-                self.after(45, self._refresh_display_text)
-                return
-
-            avail_phys_px = max(32, phys_w - 6)
-            f_obj = get_tkfont_for_widget(tk_ent, fallback_family=UI_FONT, fallback_size=-self.font_size, fallback_weight="bold")
-            disp = truncate_text_with_font(self.current_val, avail_phys_px, tk_font_obj=f_obj)
-            if self.entry.get() != disp:
-                self.entry.delete(0, "end")
-                self.entry.insert(0, disp)
-            tk_ent.icursor(0)
-            tk_ent.xview_moveto(0.0)
-        except Exception:
-            try:
-                if self.entry.get() != self.current_val:
-                    self.entry.delete(0, "end")
-                    self.entry.insert(0, self.current_val)
-            except Exception:
-                pass
+        ico = self.icon_provider(self.current_val)
+        if ico is not None and not ico.isNull():
+            self.lbl_icon.setPixmap(ico.pixmap(self._icon_size))
+            self.lbl_icon.show()
+        else:
+            self.lbl_icon.hide()
 
     def _start_editing_and_open(self):
-        if hasattr(self.root, "_close_all_dropdowns"):
-            self.root._close_all_dropdowns(except_dd=self)
+        if hasattr(self.root, "_close_all_popups"):
+            self.root._close_all_popups(except_widget=self)
         self._is_editing = True
-        self._update_header_flag()
-        self.configure(border_color=THEME["border_focus"])
-        self.entry.delete(0, "end")
-        self.open_dropdown(self.values)
-        self.entry._entry.focus_set()
+        self._update_icon()
+        self.setProperty("focused", True)
+        self.style().unpolish(self)
+        self.style().polish(self)
+        if self.editable:
+            self.edit.setCursor(Qt.CursorShape.IBeamCursor)
+            self.edit.clear()
+        self.open_popup(self.values, animate=True)
+        self.edit.setFocus()
 
-    def _on_toggle_btn_click(self, event=None):
-        if self._popup_open and self.dropdown_win and self.dropdown_win.winfo_exists() and self.dropdown_win.winfo_ismapped():
-            self.close_dropdown()
+    def _toggle_popup(self):
+        if self.popup.isVisible():
+            self.close_popup()
         else:
             self._start_editing_and_open()
-        return "break"
 
-    def _on_entry_click(self, event=None):
-        if self._popup_open and self.dropdown_win and self.dropdown_win.winfo_exists() and self.dropdown_win.winfo_ismapped():
-            self.entry._entry.focus_set()
+    def _on_text_edited(self, text):
+        if not self.edit.hasFocus() or not self._is_editing:
             return
-        self._start_editing_and_open()
-
-    def trigger_filter_from_entry(self):
-        self._is_editing = True
-        self._update_header_flag()
-        query = self.entry.get().strip().lower()
-        if not query:
+        q = text.strip().lower()
+        if not q:
             matches = self.values
         elif getattr(self.root, "use_smart_search", False):
-            matches = smart_filter_items(query, self.values, self.aliases)
+            matches = smart_filter_items(q, self.values, self.aliases)
         else:
             matches = [
                 item for item in self.values
-                if query in item.lower()
-                or query in self.aliases.get(strip_flag_prefix(strip_loaded_prefix(item)), "")
-                or query in self.aliases.get(strip_loaded_prefix(item), "")
+                if q in item.lower()
+                or q in self.aliases.get(strip_flag_prefix(strip_loaded_prefix(item)), "")
+                or q in self.aliases.get(strip_loaded_prefix(item), "")
             ]
-        self.open_dropdown(matches)
+        self.open_popup(matches, animate=False)
 
-    def _on_key_release(self, event):
-        if event.keysym in (
-            "Return", "Escape", "Up", "Down", "Left", "Right", "Home", "End",
-            "Control_L", "Control_R", "Shift_L", "Shift_R", "Alt_L", "Alt_R",
-            "Tab", "ISO_Left_Tab", "Caps_Lock", "Num_Lock"
-        ):
+    def _on_enter(self):
+        if not self._is_editing:
             return
-        if event.state & 0x4:
-            return
-        self.trigger_filter_from_entry()
-
-    def _set_highlighted_row(self, new_idx, ensure_visible=True):
-        if not self._filtered_items or not self.list_canvas:
-            return
-        new_idx = max(0, min(new_idx, len(self._filtered_items) - 1))
-        old_idx = self._selected_idx
-        self._selected_idx = new_idx
-        try:
-            self.list_canvas.itemconfig(f"bg_{old_idx}", fill=THEME["bg_popup"])
-            self.list_canvas.itemconfig(f"bg_{new_idx}", fill=THEME["bg_accent"])
-            if ensure_visible:
-                total_h = max(1, len(self._filtered_items) * self._row_h)
-                vis_h = max(1, self.list_canvas.winfo_height())
-                top_frac, bot_frac = self.list_canvas.yview()
-                row_top = (new_idx * self._row_h) / total_h
-                row_bot = ((new_idx + 1) * self._row_h) / total_h
-                if row_top < top_frac:
-                    self.list_canvas.yview_moveto(row_top)
-                elif row_bot > bot_frac:
-                    self.list_canvas.yview_moveto(max(0.0, row_bot - (vis_h / total_h)))
-        except Exception:
-            pass
-
-    def _on_arrow_down(self, event):
-        if not (self._popup_open and self.dropdown_win and self.dropdown_win.winfo_ismapped()):
-            self._start_editing_and_open()
-            return "break"
-        if self._filtered_items:
-            self._set_highlighted_row(self._selected_idx + 1, ensure_visible=True)
-        return "break"
-
-    def _on_arrow_up(self, event):
-        if self._popup_open and self.dropdown_win and self.dropdown_win.winfo_ismapped() and self._filtered_items:
-            self._set_highlighted_row(self._selected_idx - 1, ensure_visible=True)
-        return "break"
-
-    def _on_enter(self, event=None):
-        typed = self.entry.get().strip()
-        if self._popup_open and self.dropdown_win and self.dropdown_win.winfo_ismapped() and self._filtered_items:
-            idx = max(0, min(self._selected_idx, len(self._filtered_items) - 1))
-            self.select(self._filtered_items[idx])
-            return
-        if self.allow_custom and typed and not typed.endswith("..."):
+        typed = self.edit.text().strip()
+        if self.popup.isVisible() and self.list_widget.count() > 0:
+            cur_item = self.list_widget.currentItem()
+            if cur_item and cur_item.data(Qt.ItemDataRole.UserRole) is not None:
+                self.select(cur_item.data(Qt.ItemDataRole.UserRole))
+                return
+        if self.allow_custom and typed:
             self.select(typed, is_custom=True)
         else:
             self.select(self.current_val)
 
-    def _create_popup_if_needed(self):
-        if self.dropdown_win and self.dropdown_win.winfo_exists():
-            return
+    def _on_item_clicked(self, item):
+        val = item.data(Qt.ItemDataRole.UserRole)
+        if val is not None:
+            self.select(val)
 
-        # Внутриоконный фрейм-оверлей: не создает отдельного окна ОС и не забирает фокус у приложения
-        self.dropdown_win = tk.Frame(
-            self.root,
-            bg=THEME["border_focus"],
-            padx=1,
-            pady=1,
-            bd=0,
-            highlightthickness=0
-        )
+    def _compute_target_geometry(self):
+        top_left = self.mapTo(self.root, QPoint(0, 0))
+        box_w = self.width()
+        if not self.allow_custom and self.editable and self.parentWidget() is not None:
+            box_w = max(box_w, self.parentWidget().width())
+        box_w = max(box_w, self.min_popup_width)
+        if top_left.x() + box_w > self.root.width() - 8:
+            box_w = max(90, self.root.width() - top_left.x() - 8)
 
-        container = tk.Frame(self.dropdown_win, bg=THEME["bg_popup"], bd=0, highlightthickness=0)
-        container.pack(fill="both", expand=True)
+        row_h = max(24, self._icon_size.height() + 12)
+        count = max(1, self.list_widget.count())
+        desired_h = min(count * row_h + 6, 260)
+        gap = 4
 
-        self.list_canvas = tk.Canvas(
-            container,
-            bg=THEME["bg_popup"],
-            bd=0,
-            highlightthickness=0,
-            cursor="hand2",
-            takefocus=0
-        )
-        self.list_canvas.pack(side="left", fill="both", expand=True)
+        space_below = self.root.height() - (top_left.y() + self.height()) - 8
+        space_above = top_left.y() - 8
 
-        self.scrollbar = ctk.CTkScrollbar(
-            container,
-            command=self.list_canvas.yview,
-            width=12,
-            fg_color=THEME["bg_popup"],
-            button_color="#323846",
-            button_hover_color="#454d5e"
-        )
-        self.scrollbar.pack(side="right", fill="y", padx=2, pady=2)
-        self.list_canvas.configure(yscrollcommand=self.scrollbar.set)
-
-        for sb_w in (self.scrollbar, getattr(self.scrollbar, "_canvas", None)):
-            if sb_w is not None:
-                sb_w.bind("<Button-1>", lambda e: self.after(1, self._keep_entry_focus), add="+")
-                sb_w.bind("<B1-Motion>", lambda e: self.after(1, self._keep_entry_focus), add="+")
-                sb_w.bind("<ButtonRelease-1>", lambda e: self.after(1, self._keep_entry_focus), add="+")
-                sb_w.bind("<MouseWheel>", self._on_mousewheel)
-
-        self.list_canvas.bind("<Motion>", self._on_canvas_hover)
-        self.list_canvas.bind("<ButtonRelease-1>", self._on_canvas_click)
-        self.list_canvas.bind("<MouseWheel>", self._on_mousewheel)
-        self.list_canvas.bind("<Button-4>", lambda e: self.list_canvas.yview_scroll(-2, "units"))
-        self.list_canvas.bind("<Button-5>", lambda e: self.list_canvas.yview_scroll(2, "units"))
-
-    def _on_entry_mousewheel(self, event):
-        if self._popup_open and self.list_canvas:
-            return self._on_mousewheel(event)
-
-    def _on_mousewheel(self, event):
-        if not self.list_canvas:
-            return "break"
-        delta = event.delta
-        step = int(-1 * (delta / 120) * 2) if abs(delta) >= 120 else (-1 if delta > 0 else 1)
-        self.list_canvas.yview_scroll(step, "units")
-        return "break"
-
-    def _on_canvas_hover(self, event):
-        if not self._filtered_items:
-            return
-        cy = self.list_canvas.canvasy(event.y)
-        idx = int(cy // self._row_h)
-        if 0 <= idx < len(self._filtered_items) and idx != self._selected_idx:
-            self._set_highlighted_row(idx, ensure_visible=False)
-
-    def _on_canvas_click(self, event):
-        if not self._filtered_items:
-            return
-        cy = self.list_canvas.canvasy(event.y)
-        idx = int(cy // self._row_h)
-        if 0 <= idx < len(self._filtered_items):
-            self.select(self._filtered_items[idx])
-
-    def _compute_popup_width_px(self):
-        self.update_idletasks()
-        frame_w = self.winfo_width()
-        if not self.allow_custom and self.master is not None:
-            return max(frame_w, self.master.winfo_width())
-        return max(frame_w, 180)
-
-    def sync_position(self):
-        if not self._popup_open or not self.dropdown_win or not self.dropdown_win.winfo_exists():
-            return
-        if not self.root.winfo_viewable() or self.root.state() == "iconic":
-            self.close_dropdown()
-            return
-
-        self.root.update_idletasks()
-        try:
-            scale = self._get_widget_scaling()
-        except Exception:
-            scale = 1.0
-
-        rel_x = self.winfo_rootx() - self.root.winfo_rootx()
-        rel_y = self.winfo_rooty() - self.root.winfo_rooty()
-        box_w = self._compute_popup_width_px()
-        box_h = self.winfo_height()
-        root_w = self.root.winfo_width()
-        root_h = self.root.winfo_height()
-
-        if rel_x + box_w > root_w - 6:
-            box_w = max(160, root_w - rel_x - 6)
-
-        count = max(len(self._filtered_items), 1)
-        self._row_h = max(26, int(26 * scale))
-        max_phys_h = int(260 * scale)
-        gap_phys = max(int(4 * scale), 4)
-
-        space_below = root_h - (rel_y + box_h) - 8
-        space_above = rel_y - 8
-
-        if (self.prefer_upwards and space_above >= 120) or (space_below < 140 and space_above > space_below):
-            avail_h = max(80, space_above - gap_phys)
-            popup_phys_h = min(count * self._row_h + 6, max_phys_h, avail_h)
-            pos_y = rel_y - popup_phys_h - gap_phys
+        if (self.prefer_upwards and space_above >= 100) or (space_below < 120 and space_above > space_below):
+            h = min(desired_h, max(64, space_above - gap))
+            y = top_left.y() - h - gap
+            upwards = True
         else:
-            avail_h = max(80, space_below - gap_phys)
-            popup_phys_h = min(count * self._row_h + 6, max_phys_h, avail_h)
-            pos_y = rel_y + box_h + gap_phys
+            h = min(desired_h, max(64, space_below - gap))
+            y = top_left.y() + self.height() + gap
+            upwards = False
 
-        self.dropdown_win.place(x=rel_x, y=pos_y, width=box_w, height=popup_phys_h)
-        self.dropdown_win.lift()
+        return QRect(top_left.x(), y, box_w, h), upwards
 
-    def open_dropdown(self, items):
-        self._create_popup_if_needed()
-        self._filtered_items = list(items)
-        self._popup_open = True
-        try:
-            scale = self._get_widget_scaling()
-        except Exception:
-            scale = 1.0
-        self._row_h = max(26, int(26 * scale))
-
-        popup_phys_w = self._compute_popup_width_px()
-        sb_reserve = max(int(18 * scale), 18)
-        text_x = int(34 * scale) if self.flag_provider is not None else 12
-        avail_list_phys_px = max(120, popup_phys_w - text_x - sb_reserve - 8)
-        row_font = (UI_FONT, 11)
-
-        self.list_canvas.delete("all")
-        self.list_canvas._img_refs = []
-
-        if not self._filtered_items:
-            msg = self.root._tr("custom_lang_hint") if self.allow_custom else self.root._tr("no_matches")
-            self.list_canvas.create_text(
-                12, self._row_h // 2,
-                text=msg, fill="gray", font=row_font, anchor="w"
-            )
-            self.list_canvas.configure(scrollregion=(0, 0, popup_phys_w - sb_reserve, self._row_h))
+    def open_popup(self, items, animate=True):
+        self.list_widget.clear()
+        row_h = max(24, self._icon_size.height() + 12)
+        if not items:
+            hint = self.root._tr("custom_lang_hint") if self.allow_custom else self.root._tr("no_matches")
+            it = QListWidgetItem(hint)
+            it.setData(Qt.ItemDataRole.UserRole, None)
+            it.setFlags(Qt.ItemFlag.NoItemFlags)
+            it.setSizeHint(QSize(0, row_h))
+            self.list_widget.addItem(it)
         else:
             cur_clean = strip_flag_prefix(strip_loaded_prefix(self.current_val))
-            self._selected_idx = 0
-            for idx, item in enumerate(self._filtered_items):
-                if strip_flag_prefix(strip_loaded_prefix(item)) == cur_clean:
-                    self._selected_idx = idx
-                    break
+            sel_row = 0
+            for idx, val in enumerate(items):
+                it = QListWidgetItem(val)
+                it.setData(Qt.ItemDataRole.UserRole, val)
+                it.setToolTip(val)
+                it.setSizeHint(QSize(0, row_h))
+                if self.icon_provider is not None:
+                    ico = self.icon_provider(val)
+                    if ico is not None:
+                        it.setIcon(ico)
+                self.list_widget.addItem(it)
+                if strip_flag_prefix(strip_loaded_prefix(val)) == cur_clean:
+                    sel_row = idx
+            self.list_widget.setCurrentRow(sel_row)
 
-            f_obj = get_tkfont_for_widget(self.list_canvas, fallback_family=UI_FONT, fallback_size=-11, fallback_weight="normal")
-            for idx, item in enumerate(self._filtered_items):
-                y0 = idx * self._row_h
-                y1 = y0 + self._row_h
-                yc = y0 + self._row_h // 2
-                bg_col = THEME["bg_accent"] if idx == self._selected_idx else THEME["bg_popup"]
+        target_rect, upwards = self._compute_target_geometry()
+        self._anim_geom.stop()
 
-                self.list_canvas.create_rectangle(
-                    2, y0 + 1, popup_phys_w - sb_reserve, y1 - 1,
-                    fill=bg_col, outline="", tags=(f"bg_{idx}",)
-                )
-                if self.flag_provider is not None:
-                    photo = self.flag_provider(item)
-                    if photo is not None:
-                        self.list_canvas._img_refs.append(photo)
-                        self.list_canvas.create_image(int(17 * scale), yc, image=photo, anchor="center")
+        if animate and not self.popup.isVisible():
+            start_h = max(14, int(target_rect.height() * 0.25))
+            start_y = (target_rect.bottom() - start_h) if upwards else target_rect.top()
+            start_rect = QRect(target_rect.x(), start_y, target_rect.width(), start_h)
 
-                disp_item = truncate_text_with_font(item, avail_list_phys_px, tk_font_obj=f_obj)
-                self.list_canvas.create_text(
-                    text_x, yc,
-                    text=disp_item, fill="#ffffff", font=row_font, anchor="w"
-                )
+            self.popup.setGeometry(start_rect)
+            self.popup.show()
+            self.popup.raise_()
 
-            total_h = len(self._filtered_items) * self._row_h
-            self.list_canvas.configure(scrollregion=(0, 0, popup_phys_w - sb_reserve, total_h))
+            self._anim_geom.setStartValue(start_rect)
+            self._anim_geom.setEndValue(target_rect)
+            self._anim_geom.start()
+        else:
+            self.popup.setGeometry(target_rect)
+            self.popup.show()
+            self.popup.raise_()
 
-        self.list_canvas.yview_moveto(0.0)
-        self.sync_position()
-        if self._filtered_items and self._selected_idx > 4:
-            self._set_highlighted_row(self._selected_idx, ensure_visible=True)
-        self._keep_entry_focus()
+    def sync_position(self):
+        if not self.isVisible() or not self.popup.isVisible():
+            return
+        target_rect, _ = self._compute_target_geometry()
+        self.popup.setGeometry(target_rect)
 
     def select(self, val, is_custom=False):
         if val in self.values or is_custom:
             self.current_val = val
             if is_custom and val not in self.values:
                 self.values.append(val)
-        self._is_editing = False
-        self._popup_open = False
-        self.configure(border_color=THEME["border_subtle"])
-        if self.dropdown_win and self.dropdown_win.winfo_exists():
-            self.dropdown_win.place_forget()
-        self._refresh_display_text()
-        self.root.focus_set()
-        if self.command:
-            self.command(self.current_val)
+        self._finish_editing_state()
+        self._anim_geom.stop()
+        self.popup.hide()
+        self._update_icon()
+        self.edit.setText(self.current_val)
+        self.edit.setCursorPosition(0)
+        self.edit.setToolTip(self.current_val)
+        self.edit.clearFocus()
+        self.selectionChanged.emit(self.current_val)
 
-    def close_dropdown(self):
+    def close_popup(self):
+        self._finish_editing_state()
+        self._anim_geom.stop()
+        self.popup.hide()
+        self._update_icon()
+        self.edit.setText(self.current_val)
+        self.edit.setCursorPosition(0)
+        self.edit.setToolTip(self.current_val)
+        self.edit.clearFocus()
+
+    def _finish_editing_state(self):
         self._is_editing = False
-        self._popup_open = False
-        self.configure(border_color=THEME["border_subtle"])
-        if self.dropdown_win and self.dropdown_win.winfo_exists():
-            self.dropdown_win.place_forget()
-        self._refresh_display_text()
+        self.edit.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setProperty("focused", False)
+        self.style().unpolish(self)
+        self.style().polish(self)
 
     def configure_values(self, new_values):
         self.values = list(new_values)
@@ -1792,73 +1969,94 @@ class SearchableDropdown(ctk.CTkFrame):
 
     def set(self, val):
         self.current_val = val
-        self._is_editing = False
-        self._refresh_display_text()
+        self._finish_editing_state()
+        self._update_icon()
+        self.edit.setText(val)
+        self.edit.setCursorPosition(0)
+        self.edit.setToolTip(val)
 
 
-class LLMTranslateApp(ctk.CTk):
+class InputTextEdit(QPlainTextEdit):
+    submitRequested = Signal()
+    imagePasted = Signal(object)
+
+    def keyPressEvent(self, event):
+        if (event.modifiers() & Qt.KeyboardModifier.ControlModifier) and event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self.submitRequested.emit()
+            return
+        super().keyPressEvent(event)
+
+    def insertFromMimeData(self, source):
+        if source.hasImage():
+            qimg = source.imageData()
+            if isinstance(qimg, QImage) and not qimg.isNull():
+                self.imagePasted.emit(qimg)
+                return
+        if source.hasUrls():
+            for url in source.urls():
+                local = url.toLocalFile()
+                if local and os.path.isfile(local) and local.lower().endswith((".png", ".jpg", ".jpeg", ".webp", ".bmp")):
+                    qimg = QImage(local)
+                    if not qimg.isNull():
+                        self.imagePasted.emit(qimg)
+                        return
+        super().insertFromMimeData(source)
+
+
+class UISignals(QObject):
+    statusAnimStart = Signal(str, str)
+    statusAnimPhase = Signal(str, str)
+    statusAnimStop = Signal(str, str, float)
+    modelsUpdated = Signal(list, bool, bool)
+    refreshModelLabels = Signal()
+    detectedLangUpdated = Signal(str)
+    mismatchBannerShown = Signal(int, str)
+    typewriterUpdated = Signal(int, str, bool, str, str, float, bool, str, str)
+    renderDirectOutput = Signal(str)
+    resetGenerationButtons = Signal()
+    ttsFinished = Signal()
+    flagDownloaded = Signal(str)
+    uiIconsDownloaded = Signal()
+
+
+class LLMTranslateWindow(QMainWindow):
     def __init__(self):
-        super().__init__(fg_color=THEME["bg_root"])
-        self.ui_lang = self._peek_ui_lang()
+        super().__init__()
+        self.ui_lang, self.theme_mode, self.ui_scale = self._peek_initial_prefs()
+        THEME.update(THEME_PALETTES.get(self.theme_mode, THEME_PALETTES["dark"]))
 
-        self.withdraw()
-        self.splash = GUISplashScreen(self, subtitle_text=self._tr("splash_sub"), init_text=self._tr("splash_init"))
-        self.splash.set_progress(5, self._tr("splash_env"))
+        self.sig = UISignals()
+        self._connect_signals()
 
-        self.title("LLM TRANSLATE")
-        w, h = 1060, 600
-        sw = self.winfo_screenwidth()
-        sh = self.winfo_screenheight()
-        x = max(0, (sw - w) // 2)
-        y = max(0, (sh - h) // 2)
-        self.geometry(f"{w}x{h}+{x}+{y}")
-        self.minsize(860, 470)
+        self.setWindowTitle("LLM TRANSLATE")
         self._apply_app_icon()
 
-        self.raw_icons = ensure_cached_icons(splash=self.splash)
-        self.raw_flags = ensure_cached_flags(splash=self.splash)
-        self.splash.set_progress(72, self._tr("splash_tex"))
+        self.flag_pixmaps = {}
+        for code in sorted(set(LANG_ISO_MAP.values())):
+            self.flag_pixmaps[code] = create_flag_pixmap(code)
 
-        self.ctk_icons = {}
-        icon_sizes = {
-            "swap": (18, 18), "tts_play": (18, 18), "tts_stop": (18, 18), "play": (20, 20), "stop": (18, 18),
-            "refresh": (16, 16), "vram_clean": (16, 16), "model_load": (16, 16), "server": (15, 15), "settings": (16, 16)
-        }
-        for k, sz in icon_sizes.items():
-            if k in self.raw_icons and self.raw_icons[k] is not None:
-                self.ctk_icons[k] = ctk.CTkImage(light_image=self.raw_icons[k], dark_image=self.raw_icons[k], size=sz)
-            else:
-                self.ctk_icons[k] = None
-
-        self.flag_tk_photos = {}
-        self.flag_ctk_icons = {}
-        if HAS_PIL:
-            for code, pil_img in self.raw_flags.items():
-                try:
-                    resized = pil_img.resize((20, 14), Image.Resampling.LANCZOS)
-                    self.flag_tk_photos[code] = ImageTk.PhotoImage(resized)
-                    self.flag_ctk_icons[code] = ctk.CTkImage(light_image=pil_img, dark_image=pil_img, size=(18, 13))
-                except Exception:
-                    pass
-
-        self.client = OpenAI(base_url=f"http://{LM_HOST}:{LM_PORT}/v1", api_key="lm-studio", timeout=15.0)
+        self.client = OpenAI(base_url=f"http://{LM_HOST}:{LM_PORT}/v1", api_key="lm-studio", timeout=30.0)
         self.model_id = self._tr("select_model")
         self._saved_config_model = self._tr("select_model")
         self._available_models = []
+        self._model_meta = {}
         self._loaded_vram_models = set()
         self._is_online = False
         self._server_booting = False
         self._is_loading_model = False
         self.use_smart_search = False
+        self.enable_thinking = False
+        self.vision_model_id = ""
+        self._attached_image_b64 = ""
+        self._attached_image_name = ""
         self.pin_window = False
-        self.settings_win = None
 
         self._tts_proc = None
         self._tts_lock = threading.Lock()
         self._tts_stop_event = threading.Event()
         self._is_speaking = False
 
-        self.is_auto_detect = True
+        self.auto_detect_mode = "ai"
         self.detected_src_lang = None
 
         self._task_id = 0
@@ -1867,15 +2065,14 @@ class LLMTranslateApp(ctk.CTk):
         self._stream_lock = threading.Lock()
         self._last_edit_time = 0.0
         self._last_translated_state = ("", "", "", "")
-        self._last_win_rect = (0, 0, 0, 0)
 
         self._anim_running = False
         self._anim_phase_text = ""
         self._anim_color = "#eab308"
         self._anim_start_ts = 0.0
         self._anim_step = 0
-        self._full_status_text = self._tr("connecting")
-        self._full_status_color = THEME["text_muted"]
+        self._raw_status_text = self._tr("connecting")
+        self._raw_status_color = THEME["text_muted"]
 
         self._tw_task_id = -1
         self._tw_target_text = ""
@@ -1893,74 +2090,1047 @@ class LLMTranslateApp(ctk.CTk):
         self._tw_running = False
         self._dict_dots_step = 0
         self._last_clean_translation = ""
-        self._last_selected_out_text = ""
 
-        self.protocol("WM_DELETE_WINDOW", self.on_closing)
-
-        self.splash.set_progress(82, self._tr("splash_ui"))
         self._build_ui()
-
-        self.splash.set_progress(92, self._tr("splash_cfg"))
-        self._setup_bindings()
         self._load_config()
+        self.apply_scale(self.ui_scale, save=False, resize_window=True)
         self._update_swap_button_state()
         self._sync_vram_button_visibility()
 
-        self.splash.set_progress(100, self._tr("splash_start"))
-        time.sleep(0.05)
-        self.splash.close()
+        self._anim_timer = QTimer(self)
+        self._anim_timer.timeout.connect(self._tick_status_anim)
+        self._anim_timer.start(80)
 
-        self._withdraw_called_before_window_exists = False
-        self._iconify_called_before_window_exists = False
-        self.deiconify()
-        self.update_idletasks()
-        self.after(50, self._ensure_window_visible)
+        self._tw_timer = QTimer(self)
+        self._tw_timer.timeout.connect(self._typewriter_tick)
+        self._tw_timer.start(25)
 
+        self._watcher_timer = QTimer(self)
+        self._watcher_timer.timeout.connect(self._realtime_watcher)
+        self._watcher_timer.start(120)
+
+        self._reconnect_timer = QTimer(self)
+        self._reconnect_timer.timeout.connect(self._auto_reconnect_loop)
+        self._reconnect_timer.start(5000)
+
+        QApplication.instance().installEventFilter(self)
+        self._start_background_cdn_assets_sync()
         self.fetch_models(auto_start_server=True)
-        self.after(120, self._realtime_watcher)
-        self.after(5000, self._auto_reconnect_loop)
 
-    def _get_flag_photo_for_label(self, label_text):
-        if not label_text or label_text in ALL_LANG_PLACEHOLDERS:
-            return None
-        clean = strip_flag_prefix(label_text)
-        if clean.startswith("Авто (") or clean.startswith("Auto Detect ("):
-            inner = clean.split("(", 1)[1].rstrip(")")
-            canon = self._lang_to_canonical(inner)
-        else:
-            canon = self._lang_to_canonical(clean)
-        iso = LANG_ISO_MAP.get(canon, "globe")
-        return self.flag_tk_photos.get(iso) or self.flag_tk_photos.get("globe")
+    @staticmethod
+    def _set_btn_enabled_with_cursor(btn, enabled):
+        btn.setEnabled(enabled)
+        btn.setCursor(Qt.CursorShape.PointingHandCursor if enabled else Qt.CursorShape.ForbiddenCursor)
 
-    def _ensure_window_visible(self):
-        try:
-            self._withdraw_called_before_window_exists = False
-            if self.state() != "normal":
-                self.deiconify()
-            self._apply_app_icon()
-            self.lift()
-            self.focus_force()
-            for dd in (self.dd_src, self.dd_tgt, self.dd_model):
-                dd._refresh_display_text()
-            self._refresh_status_label_ellipsis()
-        except Exception:
-            pass
+    def _connect_signals(self):
+        self.sig.statusAnimStart.connect(self._start_status_anim)
+        self.sig.statusAnimPhase.connect(self._update_status_anim_phase)
+        self.sig.statusAnimStop.connect(self._stop_status_anim)
+        self.sig.modelsUpdated.connect(self._update_models_ui)
+        self.sig.refreshModelLabels.connect(self._refresh_model_dropdown_labels)
+        self.sig.detectedLangUpdated.connect(self._apply_detected_language_ui)
+        self.sig.mismatchBannerShown.connect(self._show_instant_mismatch_banner)
+        self.sig.typewriterUpdated.connect(self._start_or_update_typewriter)
+        self.sig.renderDirectOutput.connect(self._render_direct_text)
+        self.sig.resetGenerationButtons.connect(self._reset_gen_buttons)
+        self.sig.ttsFinished.connect(self._reset_tts_ui_after_finish)
+        self.sig.flagDownloaded.connect(self._on_cdn_flag_ready)
+        self.sig.uiIconsDownloaded.connect(self._on_cdn_ui_icons_ready)
 
-    def _peek_ui_lang(self):
+    def _start_background_cdn_assets_sync(self):
+        def worker():
+            downloaded_ui = False
+            for local_name, lucide_slug in CDN_UI_ICON_NAMES.items():
+                if find_user_asset(local_name):
+                    continue
+                dest = os.path.join(UI_ICONS_CACHE_DIR, f"{local_name}.svg")
+                if os.path.isfile(dest) and os.path.getsize(dest) > 32:
+                    continue
+                urls = [
+                    f"https://unpkg.com/lucide-static@latest/icons/{lucide_slug}.svg",
+                    f"https://cdn.jsdelivr.net/npm/lucide-static@latest/icons/{lucide_slug}.svg",
+                    f"https://api.iconify.design/lucide/{lucide_slug}.svg?width=24&height=24",
+                ]
+                raw = _fetch_first_working_url(urls, timeout=3.5)
+                if raw and b"<svg" in raw:
+                    try:
+                        with open(dest, "wb") as f:
+                            f.write(raw)
+                        downloaded_ui = True
+                    except Exception:
+                        pass
+            if downloaded_ui:
+                self.sig.uiIconsDownloaded.emit()
+
+            codes = sorted({
+                c for c in set(LANG_ISO_MAP.values())
+                if not c.startswith("badge_") and not c.startswith("reg-")
+            })
+            for code in codes:
+                if find_user_asset(os.path.join("flags", code)):
+                    continue
+                dest_png = os.path.join(FLAGS_CACHE_DIR, f"{code}.png")
+                dest_svg = os.path.join(FLAGS_CACHE_DIR, f"{code}.svg")
+                if (os.path.isfile(dest_png) and os.path.getsize(dest_png) > 64) or (
+                    os.path.isfile(dest_svg) and os.path.getsize(dest_svg) > 64
+                ):
+                    continue
+
+                c_low = code.lower()
+                raw_png = _fetch_first_working_url([f"https://flagcdn.com/w40/{c_low}.png"], timeout=2.5)
+                if raw_png and raw_png.startswith(b"\x89PNG"):
+                    try:
+                        with open(dest_png, "wb") as f:
+                            f.write(raw_png)
+                        self.sig.flagDownloaded.emit(code)
+                        continue
+                    except Exception:
+                        pass
+
+                raw_svg = _fetch_first_working_url([
+                    f"https://cdn.jsdelivr.net/npm/flag-icons@7.2.3/flags/4x3/{c_low}.svg",
+                    f"https://unpkg.com/flag-icons@7.2.3/flags/4x3/{c_low}.svg",
+                ], timeout=3.0)
+                if raw_svg and b"<svg" in raw_svg:
+                    try:
+                        with open(dest_svg, "wb") as f:
+                            f.write(raw_svg)
+                        self.sig.flagDownloaded.emit(code)
+                    except Exception:
+                        pass
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_cdn_flag_ready(self, iso_code):
+        self.flag_pixmaps[iso_code] = create_flag_pixmap(iso_code)
+        self.dd_src._update_icon()
+        self.dd_tgt._update_icon()
+
+    def _on_cdn_ui_icons_ready(self):
+        self._refresh_button_icons()
+        self._refresh_model_dropdown_labels()
+
+    def _apply_app_icon(self):
+        for name in ("logo.ico", "logo.png", os.path.join("icons", "logo.ico"), os.path.join("icons", "logo.png")):
+            p = resource_path(name)
+            if os.path.isfile(p):
+                self.setWindowIcon(QIcon(p))
+                break
+
+    def _peek_initial_prefs(self):
+        lang, theme, scale = "ru", "dark", 100
         if os.path.isfile(CONFIG_PATH):
             try:
                 with open(CONFIG_PATH, "r", encoding="utf-8") as f:
                     cfg = json.load(f)
-                lang = cfg.get("ui_lang", "ru")
-                if lang in ("ru", "en"):
-                    return lang
+                if cfg.get("ui_lang") in ("ru", "en"):
+                    lang = cfg["ui_lang"]
+                if cfg.get("theme_mode") in ("dark", "amoled", "light"):
+                    theme = cfg["theme_mode"]
+                sc = int(cfg.get("ui_scale", 100))
+                if sc in SCALE_OPTIONS:
+                    scale = sc
+                elif 75 <= sc <= 150:
+                    scale = min(SCALE_OPTIONS, key=lambda x: abs(x - sc))
             except Exception:
                 pass
-        return "ru"
+        return lang, theme, scale
 
     def _tr(self, key, **kwargs):
         text = UI_STRINGS.get(self.ui_lang, UI_STRINGS["ru"]).get(key, key)
         return text.format(**kwargs) if kwargs else text
+
+    def _get_flag_qicon_for_label(self, label_text):
+        if not label_text or label_text in ALL_LANG_PLACEHOLDERS:
+            return None
+        clean = strip_flag_prefix(label_text)
+        if clean.startswith("Авто ИИ (") or clean.startswith("Auto AI (") or clean in (UI_STRINGS["ru"]["auto_ai"], UI_STRINGS["en"]["auto_ai"]):
+            pm = self.flag_pixmaps.get("badge_ai")
+            return QIcon(pm.copy()) if pm else None
+        if clean.startswith("Авто (") or clean.startswith("Auto (") or clean in (UI_STRINGS["ru"]["auto_fast"], UI_STRINGS["en"]["auto_fast"]):
+            pm = self.flag_pixmaps.get("badge_fast")
+            return QIcon(pm.copy()) if pm else None
+
+        canon = self._lang_to_canonical(clean)
+        iso = LANG_ISO_MAP.get(canon, "badge_fast")
+        pm = self.flag_pixmaps.get(iso) or self.flag_pixmaps.get("badge_fast")
+        return QIcon(pm.copy()) if pm is not None else None
+
+    def _get_model_qicon_for_label(self, label_text):
+        clean = strip_loaded_prefix(label_text)
+        if not clean or clean in ALL_MODEL_PLACEHOLDERS:
+            return None
+        if self._is_model_vision_capable(clean):
+            sz = max(14, int(round(18 * (self.ui_scale / 100.0))))
+            return create_vector_qicon("vision", THEME["vision_purple"], sz)
+        return None
+
+    def _build_ui(self):
+        central = QWidget()
+        central.setObjectName("CentralRoot")
+        self.setCentralWidget(central)
+
+        self.root_grid = QGridLayout(central)
+        self.root_grid.setContentsMargins(12, 12, 12, 12)
+        self.root_grid.setHorizontalSpacing(8)
+        self.root_grid.setVerticalSpacing(8)
+        self.root_grid.setColumnStretch(0, 1)
+        self.root_grid.setColumnStretch(1, 0)
+        self.root_grid.setColumnStretch(2, 1)
+        self.root_grid.setRowStretch(1, 1)
+
+        # Row 0: Language Selectors
+        self.dd_src = SearchableSelector(
+            self, self._get_localized_world_languages(), self._tr("auto_ai"),
+            aliases=LANG_MAP, prefer_upwards=False, height=34,
+            allow_custom=True, font_size=11, icon_provider=self._get_flag_qicon_for_label
+        )
+        self.dd_src.selectionChanged.connect(self._on_src_lang_selected)
+        self.root_grid.addWidget(self.dd_src, 0, 0)
+
+        self.dd_tgt = SearchableSelector(
+            self, self._get_localized_target_languages(), self._tr("select_lang"),
+            aliases=LANG_MAP, prefer_upwards=False, height=34,
+            allow_custom=True, font_size=11, icon_provider=self._get_flag_qicon_for_label
+        )
+        self.dd_tgt.selectionChanged.connect(self._on_tgt_lang_selected)
+        self.root_grid.addWidget(self.dd_tgt, 0, 2)
+
+        # Row 1, Col 0: Input Panel
+        in_box = QWidget()
+        in_lay = QVBoxLayout(in_box)
+        in_lay.setContentsMargins(0, 0, 0, 0)
+        in_lay.setSpacing(6)
+
+        self.img_banner = QFrame()
+        self.img_banner.setObjectName("ImageBanner")
+        self.img_banner.setFixedHeight(44)
+        self.img_banner.hide()
+        banner_lay = QHBoxLayout(self.img_banner)
+        banner_lay.setContentsMargins(8, 4, 8, 4)
+        banner_lay.setSpacing(8)
+
+        self.lbl_img_thumb = QLabel()
+        self.lbl_img_thumb.setFixedSize(48, 32)
+        self.lbl_img_thumb.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        banner_lay.addWidget(self.lbl_img_thumb)
+
+        self.lbl_img_vis_icon = QLabel()
+        self.lbl_img_vis_icon.setFixedSize(20, 20)
+        self.lbl_img_vis_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        banner_lay.addWidget(self.lbl_img_vis_icon)
+
+        self.lbl_img_info = QLabel()
+        self.lbl_img_info.setFont(QFont(UI_FONT, 10, QFont.Weight.DemiBold))
+        banner_lay.addWidget(self.lbl_img_info, 1)
+
+        self.btn_img_remove = QPushButton("✕")
+        self.btn_img_remove.setObjectName("DangerBtn")
+        self.btn_img_remove.setFixedSize(26, 26)
+        self.btn_img_remove.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_img_remove.clicked.connect(self.clear_attached_image)
+        banner_lay.addWidget(self.btn_img_remove)
+
+        in_lay.addWidget(self.img_banner)
+
+        self.t_in = InputTextEdit()
+        self.t_in.setObjectName("EditorIn")
+        self.t_in.setFont(QFont(UI_FONT, 12))
+        self.t_in.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.t_in.customContextMenuRequested.connect(self._show_in_context_menu)
+        self.t_in.textChanged.connect(self._mark_edited)
+        self.t_in.submitRequested.connect(self._force_trigger)
+        self.t_in.imagePasted.connect(self._attach_qimage)
+        self.md_highlighter = MarkdownInputHighlighter(self.t_in.document())
+        in_lay.addWidget(self.t_in, 1)
+
+        self.root_grid.addWidget(in_box, 1, 0)
+
+        # Row 1, Col 1: Center Action Bar
+        self.mid_bar = QWidget()
+        self.mid_bar.setFixedWidth(40)
+        mid_lay = QVBoxLayout(self.mid_bar)
+        mid_lay.setContentsMargins(0, 0, 0, 0)
+        mid_lay.setSpacing(6)
+
+        self.btn_swap = QPushButton()
+        self.btn_swap.setFixedSize(38, 34)
+        self._set_btn_enabled_with_cursor(self.btn_swap, False)
+        self.btn_swap.clicked.connect(self.swap_languages)
+        mid_lay.addWidget(self.btn_swap)
+
+        self.btn_img = QPushButton()
+        self.btn_img.setFixedSize(38, 34)
+        self._set_btn_enabled_with_cursor(self.btn_img, True)
+        self.btn_img.clicked.connect(self.select_image_file)
+        mid_lay.addWidget(self.btn_img)
+
+        self.btn_tts = QPushButton()
+        self.btn_tts.setFixedSize(38, 34)
+        self._set_btn_enabled_with_cursor(self.btn_tts, True)
+        self.btn_tts.clicked.connect(self.toggle_tts)
+        mid_lay.addWidget(self.btn_tts)
+
+        mid_lay.addStretch(1)
+
+        self.btn_go = QPushButton()
+        self.btn_go.setObjectName("AccentBtn")
+        self.btn_go.setFixedSize(38, 86)
+        self._set_btn_enabled_with_cursor(self.btn_go, True)
+        self.btn_go.clicked.connect(self._force_trigger)
+        mid_lay.addWidget(self.btn_go)
+
+        mid_lay.addStretch(1)
+
+        # Кнопка остановки скрыта в простое и появляется с красным контуром только во время перевода
+        self.btn_stop = QPushButton()
+        self.btn_stop.setObjectName("StopBtn")
+        self.btn_stop.setFixedSize(38, 34)
+        self.btn_stop.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_stop.clicked.connect(self.stop_translation)
+        self.btn_stop.hide()
+        mid_lay.addWidget(self.btn_stop)
+
+        self.root_grid.addWidget(self.mid_bar, 1, 1)
+
+        # Row 1, Col 2: Output Panel
+        out_box = QWidget()
+        out_lay = QGridLayout(out_box)
+        out_lay.setContentsMargins(0, 0, 0, 0)
+
+        self.t_out = QTextEdit()
+        self.t_out.setObjectName("EditorOut")
+        self.t_out.setReadOnly(True)
+        self.t_out.setFont(QFont(UI_FONT, 12))
+        self.t_out.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.t_out.customContextMenuRequested.connect(self._show_out_context_menu)
+        out_lay.addWidget(self.t_out, 0, 0)
+
+        self.btn_instant = QPushButton(self._tr("instant_btn"))
+        self.btn_instant.setObjectName("AccentBtn")
+        self.btn_instant.setFixedHeight(28)
+        self.btn_instant.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_instant.clicked.connect(self.skip_typewriter_animation)
+        self.btn_instant.hide()
+        out_lay.addWidget(
+            self.btn_instant, 0, 0,
+            alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignBottom
+        )
+
+        self.root_grid.addWidget(out_box, 1, 2)
+
+        # Row 2: Thin Progress Line
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setObjectName("ThinProgress")
+        self.progress_bar.setTextVisible(False)
+        self.progress_bar.setFixedHeight(3)
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.root_grid.addWidget(self.progress_bar, 2, 0, 1, 3)
+
+        # Row 3, Col 0: Bottom Left Status
+        bot_left = QWidget()
+        bl_lay = QHBoxLayout(bot_left)
+        bl_lay.setContentsMargins(2, 0, 2, 0)
+        bl_lay.setSpacing(10)
+
+        self.chk_auto = AnimatedToggleSwitch(self._tr("auto_trans_chk"))
+        self.chk_auto.setChecked(True)
+        self.chk_auto.toggled.connect(lambda _: self._save_config())
+        bl_lay.addWidget(self.chk_auto)
+
+        self.lbl_status = QLabel(self._tr("connecting"))
+        self.lbl_status.setFont(QFont(UI_FONT, 10, QFont.Weight.DemiBold))
+        self.lbl_status.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.lbl_status.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.lbl_status.setMinimumWidth(40)
+        bl_lay.addWidget(self.lbl_status, 1)
+
+        self.root_grid.addWidget(bot_left, 3, 0)
+
+        # Row 3, Col 2: Bottom Right Controls
+        bot_right = QWidget()
+        br_lay = QHBoxLayout(bot_right)
+        br_lay.setContentsMargins(0, 0, 0, 0)
+        br_lay.setSpacing(4)
+
+        self.dd_model = SearchableSelector(
+            self, [self._tr("select_model")], self._tr("select_model"),
+            prefer_upwards=True, height=30, allow_custom=False, font_size=10,
+            icon_provider=self._get_model_qicon_for_label
+        )
+        self.dd_model.selectionChanged.connect(self.set_model)
+        br_lay.addWidget(self.dd_model, 1)
+
+        self.btn_refresh = QPushButton()
+        self.btn_refresh.setFixedSize(30, 30)
+        self._set_btn_enabled_with_cursor(self.btn_refresh, True)
+        self.btn_refresh.clicked.connect(lambda: self.fetch_models(auto_start_server=False))
+        br_lay.addWidget(self.btn_refresh)
+
+        self.btn_server = QPushButton(self._tr("server_btn"))
+        self.btn_server.setObjectName("ServerBtn")
+        self.btn_server.setFixedHeight(30)
+        self._set_btn_enabled_with_cursor(self.btn_server, True)
+        self.btn_server.clicked.connect(self.start_lm_studio_server_manual)
+        br_lay.addWidget(self.btn_server)
+
+        self.btn_load_model = QPushButton()
+        self.btn_load_model.setFixedSize(30, 30)
+        self._set_btn_enabled_with_cursor(self.btn_load_model, True)
+        self.btn_load_model.clicked.connect(self.load_selected_model_to_vram)
+        br_lay.addWidget(self.btn_load_model)
+
+        self.btn_vram = QPushButton("VRAM")
+        self.btn_vram.setObjectName("DangerBtn")
+        self.btn_vram.setFixedHeight(30)
+        self._set_btn_enabled_with_cursor(self.btn_vram, True)
+        self.btn_vram.clicked.connect(self.unload_vram)
+        br_lay.addWidget(self.btn_vram)
+
+        self.btn_settings = QPushButton()
+        self.btn_settings.setFixedSize(30, 30)
+        self._set_btn_enabled_with_cursor(self.btn_settings, True)
+        self.btn_settings.clicked.connect(self._toggle_settings_popup)
+        br_lay.addWidget(self.btn_settings)
+
+        self.root_grid.addWidget(bot_right, 3, 2)
+
+        # Settings Floating Card
+        self._build_settings_popup()
+        self._refresh_all_tooltips()
+        self._refresh_button_icons()
+
+    def _build_settings_popup(self):
+        self.settings_card = QFrame(self)
+        self.settings_card.setObjectName("SettingsCard")
+        self.settings_card.setFixedWidth(320)
+        self.settings_card.hide()
+
+        self._set_opacity = QGraphicsOpacityEffect(self.settings_card)
+        self._set_opacity.setOpacity(0.0)
+        self.settings_card.setGraphicsEffect(self._set_opacity)
+
+        self._set_fade = QPropertyAnimation(self._set_opacity, b"opacity", self)
+        self._set_fade.setDuration(140)
+        self._set_fade.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._set_closing = False
+        self._set_fade.finished.connect(self._on_settings_fade_finished)
+
+        lay = QVBoxLayout(self.settings_card)
+        lay.setContentsMargins(14, 12, 14, 14)
+        lay.setSpacing(10)
+
+        self.lbl_set_title = QLabel(self._tr("settings_title"))
+        self.lbl_set_title.setFont(QFont(UI_FONT, 10, QFont.Weight.Bold))
+        lay.addWidget(self.lbl_set_title)
+
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setObjectName("SeparatorLine")
+        lay.addWidget(sep)
+
+        self.chk_pin = AnimatedToggleSwitch(self._tr("settings_pin"))
+        self.chk_pin.toggled.connect(self._toggle_pin)
+        lay.addWidget(self.chk_pin)
+
+        self.chk_smart = AnimatedToggleSwitch(self._tr("smart_search_sw"))
+        self.chk_smart.toggled.connect(self._toggle_smart_search)
+        lay.addWidget(self.chk_smart)
+
+        self.chk_thinking = AnimatedToggleSwitch(self._tr("settings_thinking"))
+        self.chk_thinking.toggled.connect(self._toggle_thinking)
+        lay.addWidget(self.chk_thinking)
+
+        self.lbl_set_vision = QLabel(self._tr("settings_vision_model"))
+        self.lbl_set_vision.setFont(QFont(UI_FONT, 9, QFont.Weight.DemiBold))
+        lay.addWidget(self.lbl_set_vision)
+
+        vis_choices, vis_default = self._get_vision_dropdown_items()
+        self.dd_vision_model = SearchableSelector(
+            self, vis_choices, vis_default,
+            prefer_upwards=True, height=28, allow_custom=False, font_size=10,
+            icon_provider=self._get_model_qicon_for_label
+        )
+        self.dd_vision_model.selectionChanged.connect(self._on_vision_model_selected)
+        lay.addWidget(self.dd_vision_model)
+
+        self.lbl_set_theme = QLabel(self._tr("settings_theme"))
+        self.lbl_set_theme.setFont(QFont(UI_FONT, 9, QFont.Weight.DemiBold))
+        lay.addWidget(self.lbl_set_theme)
+
+        theme_row = QHBoxLayout()
+        theme_row.setSpacing(6)
+        self.btn_theme_dark = AnimatedPillButton(self._tr("theme_dark"))
+        self.btn_theme_amoled = AnimatedPillButton(self._tr("theme_amoled"))
+        self.btn_theme_light = AnimatedPillButton(self._tr("theme_light"))
+        for mode_id, btn in (("dark", self.btn_theme_dark), ("amoled", self.btn_theme_amoled), ("light", self.btn_theme_light)):
+            btn.setFixedHeight(26)
+            btn.setFont(QFont(UI_FONT, 10, QFont.Weight.DemiBold))
+            btn.clicked.connect(lambda checked=False, m=mode_id: self.apply_theme(m))
+            theme_row.addWidget(btn)
+        lay.addLayout(theme_row)
+
+        scale_row = QHBoxLayout()
+        self.lbl_set_scale = QLabel(self._tr("settings_scale"))
+        self.lbl_set_scale.setFont(QFont(UI_FONT, 10))
+        scale_row.addWidget(self.lbl_set_scale, 1)
+
+        scale_items = [f"{p}%" for p in SCALE_OPTIONS]
+        self.dd_scale = SearchableSelector(
+            self, scale_items, f"{self.ui_scale}%",
+            prefer_upwards=True, height=26, allow_custom=False, editable=False,
+            font_size=10, min_popup_width=92
+        )
+        self.dd_scale.setFixedWidth(92)
+        self.dd_scale.selectionChanged.connect(self._on_scale_selected)
+        scale_row.addWidget(self.dd_scale)
+        lay.addLayout(scale_row)
+
+        lang_row = QHBoxLayout()
+        self.lbl_set_lang = QLabel(self._tr("settings_lang"))
+        self.lbl_set_lang.setFont(QFont(UI_FONT, 10))
+        lang_row.addWidget(self.lbl_set_lang, 1)
+
+        self.btn_lang_ru = AnimatedPillButton("RU")
+        self.btn_lang_ru.setIcon(QIcon(self.flag_pixmaps["ru"].copy()))
+        self.btn_lang_ru.setIconSize(QSize(20, 14))
+        self.btn_lang_ru.setFixedSize(58, 26)
+        self.btn_lang_ru.setFont(QFont(UI_FONT, 10, QFont.Weight.DemiBold))
+        self.btn_lang_ru.clicked.connect(lambda: self.set_ui_language("ru"))
+        lang_row.addWidget(self.btn_lang_ru)
+
+        self.btn_lang_en = AnimatedPillButton("EN")
+        self.btn_lang_en.setIcon(QIcon(self.flag_pixmaps["gb"].copy()))
+        self.btn_lang_en.setIconSize(QSize(20, 14))
+        self.btn_lang_en.setFixedSize(58, 26)
+        self.btn_lang_en.setFont(QFont(UI_FONT, 10, QFont.Weight.DemiBold))
+        self.btn_lang_en.clicked.connect(lambda: self.set_ui_language("en"))
+        lang_row.addWidget(self.btn_lang_en)
+
+        lay.addLayout(lang_row)
+
+    def _on_scale_selected(self, label):
+        try:
+            pct = int(label.replace("%", "").strip())
+            self.apply_scale(pct, save=True, resize_window=True)
+        except Exception:
+            pass
+
+    def apply_scale(self, scale_pct, save=True, resize_window=False):
+        scale_pct = max(75, min(150, int(scale_pct)))
+        self.ui_scale = scale_pct
+        sf = scale_pct / 100.0
+
+        # Учитываем доступную геометрию экрана (важно при 2K + системном масштабе 125%)
+        avail_w, avail_h = 1920, 1080
+        scr = self.screen() or QApplication.primaryScreen()
+        if scr is not None:
+            ag = scr.availableGeometry()
+            avail_w, avail_h = ag.width(), ag.height()
+
+        min_w = min(max(680, int(round(880 * sf))), max(640, avail_w - 40))
+        min_h = min(max(420, int(round(500 * sf))), max(400, avail_h - 60))
+        self.setMinimumSize(min_w, min_h)
+        if resize_window:
+            target_w = min(max(min_w, int(round(1040 * sf))), max(min_w, avail_w - 40))
+            target_h = min(max(min_h, int(round(590 * sf))), max(min_h, avail_h - 60))
+            self.resize(target_w, target_h)
+
+        margin = max(8, int(round(12 * sf)))
+        spacing = max(5, int(round(8 * sf)))
+        self.root_grid.setContentsMargins(margin, margin, margin, margin)
+        self.root_grid.setHorizontalSpacing(spacing)
+        self.root_grid.setVerticalSpacing(spacing)
+
+        self.dd_src.apply_scale(sf, 34, 11, base_min_popup=200)
+        self.dd_tgt.apply_scale(sf, 34, 11, base_min_popup=200)
+        self.dd_model.apply_scale(sf, 30, 10, base_min_popup=240)
+        self.dd_vision_model.apply_scale(sf, 28, 10, base_min_popup=240)
+        self.dd_scale.apply_scale(sf, 26, 10, base_min_popup=86)
+        self.dd_scale.setFixedWidth(max(78, int(round(92 * sf))))
+
+        editor_fs = max(9, int(round(12 * sf)))
+        self.t_in.setFont(QFont(UI_FONT, editor_fs))
+        self.t_out.setFont(QFont(UI_FONT, editor_fs))
+
+        mid_w = max(32, int(round(40 * sf)))
+        btn_w = max(30, int(round(38 * sf)))
+        btn_h = max(28, int(round(34 * sf)))
+        go_h = max(64, int(round(86 * sf)))
+        self.mid_bar.setFixedWidth(mid_w)
+        for b in (self.btn_swap, self.btn_img, self.btn_tts, self.btn_stop):
+            b.setFixedSize(btn_w, btn_h)
+        self.btn_go.setFixedSize(btn_w, go_h)
+
+        bot_h = max(26, int(round(30 * sf)))
+        for b in (self.btn_refresh, self.btn_load_model, self.btn_settings):
+            b.setFixedSize(bot_h, bot_h)
+        self.btn_server.setFixedHeight(bot_h)
+        self.btn_vram.setFixedHeight(bot_h)
+        self.btn_instant.setFixedHeight(max(24, int(round(28 * sf))))
+
+        small_fs = max(8, int(round(10 * sf)))
+        title_fs = max(9, int(round(10 * sf)))
+        sub_fs = max(8, int(round(9 * sf)))
+        self.chk_auto.setFont(QFont(UI_FONT, small_fs))
+        self.lbl_status.setFont(QFont(UI_FONT, small_fs, QFont.Weight.DemiBold))
+
+        # Масштабируем карточку настроек и все её элементы
+        self.settings_card.setFixedWidth(max(280, int(round(320 * sf))))
+        self.lbl_set_title.setFont(QFont(UI_FONT, title_fs, QFont.Weight.Bold))
+        for sw in (self.chk_pin, self.chk_smart, self.chk_thinking):
+            sw.setFont(QFont(UI_FONT, small_fs))
+        for lbl in (self.lbl_set_vision, self.lbl_set_theme):
+            lbl.setFont(QFont(UI_FONT, sub_fs, QFont.Weight.DemiBold))
+        for lbl in (self.lbl_set_scale, self.lbl_set_lang):
+            lbl.setFont(QFont(UI_FONT, small_fs))
+
+        pill_h = max(24, int(round(26 * sf)))
+        for b in (self.btn_theme_dark, self.btn_theme_amoled, self.btn_theme_light):
+            b.setFixedHeight(pill_h)
+            b.setFont(QFont(UI_FONT, small_fs, QFont.Weight.DemiBold))
+
+        lang_btn_w = max(52, int(round(58 * sf)))
+        lang_ico_w = max(16, int(round(20 * sf)))
+        lang_ico_h = max(11, int(round(14 * sf)))
+        for b in (self.btn_lang_ru, self.btn_lang_en):
+            b.setFixedSize(lang_btn_w, pill_h)
+            b.setIconSize(QSize(lang_ico_w, lang_ico_h))
+            b.setFont(QFont(UI_FONT, small_fs, QFont.Weight.DemiBold))
+
+        self._apply_stylesheet()
+        self._refresh_button_icons()
+        self._apply_elided_status_text()
+        if self.settings_card.isVisible():
+            self._sync_settings_popup_position()
+        if save:
+            self._save_config()
+
+    def _on_settings_fade_finished(self):
+        if self._set_closing:
+            self.settings_card.hide()
+            self._set_closing = False
+
+    def _hide_settings_card_animated(self):
+        self.dd_vision_model.close_popup()
+        self.dd_scale.close_popup()
+        if not self.settings_card.isVisible():
+            return
+        self._set_fade.stop()
+        self._set_closing = True
+        self._set_fade.setStartValue(self._set_opacity.opacity())
+        self._set_fade.setEndValue(0.0)
+        self._set_fade.start()
+
+    def _refresh_button_icons(self):
+        fg = THEME["text_main"]
+        dim = THEME["text_dim"]
+        sf = self.ui_scale / 100.0
+        sz_mid = max(14, int(round(18 * sf)))
+        sz_go = max(16, int(round(20 * sf)))
+        sz_bot = max(13, int(round(16 * sf)))
+
+        self.btn_swap.setIcon(create_vector_qicon("swap", fg if self.btn_swap.isEnabled() else dim, sz_mid))
+        self.btn_swap.setIconSize(QSize(sz_mid, sz_mid))
+        self.btn_img.setIcon(create_vector_qicon("image", "#ffffff" if self._attached_image_b64 else fg, sz_mid))
+        self.btn_img.setIconSize(QSize(sz_mid, sz_mid))
+        self.btn_tts.setIcon(create_vector_qicon("tts_stop" if self._is_speaking else "tts_play", "#ffffff" if self._is_speaking else fg, sz_mid))
+        self.btn_tts.setIconSize(QSize(sz_mid, sz_mid))
+        self.btn_go.setIcon(create_vector_qicon("play", "#ffffff" if self.btn_go.isEnabled() else dim, sz_go))
+        self.btn_go.setIconSize(QSize(sz_go, sz_go))
+
+        stop_col = "#dc2626" if self.theme_mode == "light" else "#ffffff"
+        self.btn_stop.setIcon(create_vector_qicon("stop", stop_col, sz_mid))
+        self.btn_stop.setIconSize(QSize(sz_mid, sz_mid))
+
+        self.btn_refresh.setIcon(create_vector_qicon("refresh", fg, sz_bot))
+        self.btn_refresh.setIconSize(QSize(sz_bot, sz_bot))
+        self.btn_server.setIcon(create_vector_qicon("server", fg, sz_bot))
+        self.btn_server.setIconSize(QSize(sz_bot, sz_bot))
+        self.btn_load_model.setIcon(create_vector_qicon("model_load", fg if self.btn_load_model.isEnabled() else dim, sz_bot))
+        self.btn_load_model.setIconSize(QSize(sz_bot, sz_bot))
+        self.btn_vram.setIcon(create_vector_qicon("vram_clean", "#ef4444" if self.theme_mode == "light" else "#ffffff", sz_bot))
+        self.btn_vram.setIconSize(QSize(sz_bot, sz_bot))
+        self.btn_settings.setIcon(create_vector_qicon("settings", fg, sz_bot))
+        self.btn_settings.setIconSize(QSize(sz_bot, sz_bot))
+
+        vis_sz = max(14, int(round(18 * sf)))
+        self.lbl_img_vis_icon.setPixmap(create_vector_qicon("vision", THEME["vision_purple"], vis_sz).pixmap(vis_sz, vis_sz))
+
+    def _apply_stylesheet(self):
+        t = THEME
+        sf = self.ui_scale / 100.0
+        btn_fs = max(9, int(round(11 * sf)))
+        btn_pad_h = max(6, int(round(8 * sf)))
+        qss = f"""
+        QMainWindow, QWidget#CentralRoot {{
+            background-color: {t['bg_root']};
+            color: {t['text_main']};
+        }}
+        QFrame#SelectorBox {{
+            background-color: {t['bg_input']};
+            border: 1px solid {t['border']};
+            border-radius: 6px;
+        }}
+        QFrame#SelectorBox:hover {{
+            border: 1px solid {t['border_focus']};
+        }}
+        QFrame#SelectorBox[focused="true"] {{
+            border: 1px solid {t['border_focus']};
+        }}
+        QFrame#SelectorBox QLineEdit {{
+            background: transparent;
+            color: {t['text_main']};
+            border: none;
+            selection-background-color: {t['bg_accent']};
+        }}
+        QFrame#SelectorBox QPushButton {{
+            background: transparent;
+            color: {t['text_muted']};
+            border: none;
+            border-radius: 4px;
+            padding: 0px;
+        }}
+        QFrame#SelectorBox QPushButton:hover {{
+            background-color: {t['bg_hover']};
+            color: {t['text_main']};
+        }}
+        QFrame#SelectorPopup {{
+            background-color: {t['bg_popup']};
+            border: 1px solid {t['border_focus']};
+            border-radius: 6px;
+        }}
+        QListWidget {{
+            background-color: {t['bg_popup']};
+            color: {t['text_main']};
+            border: none;
+            outline: none;
+            padding: 2px;
+        }}
+        QListWidget::item {{
+            padding: 2px 8px;
+            border-radius: 4px;
+        }}
+        QListWidget::item:selected {{
+            background-color: {t['bg_accent']};
+            color: #ffffff;
+        }}
+        QListWidget::item:hover:!selected {{
+            background-color: {t['bg_hover']};
+        }}
+        QPlainTextEdit#EditorIn {{
+            background-color: {t['bg_surface']};
+            color: {t['text_main']};
+            border: 1px solid {t['border']};
+            border-radius: 8px;
+            padding: 10px;
+            selection-background-color: {t['bg_accent']};
+            selection-color: #ffffff;
+        }}
+        QPlainTextEdit#EditorIn:focus {{
+            border: 1px solid {t['border_focus']};
+        }}
+        QTextEdit#EditorOut {{
+            background-color: {t['bg_surface_alt']};
+            color: {t['text_main']};
+            border: 1px solid {t['border']};
+            border-radius: 8px;
+            padding: 10px;
+            selection-background-color: {t['bg_accent']};
+            selection-color: #ffffff;
+        }}
+        QFrame#ImageBanner {{
+            background-color: {t['bg_input']};
+            border: 1px solid {t['border_focus']};
+            border-radius: 6px;
+        }}
+        QPushButton {{
+            background-color: {t['bg_btn']};
+            color: {t['text_main']};
+            border: 1px solid {t['border']};
+            border-radius: 6px;
+            padding: 0 {btn_pad_h}px;
+            font-family: "{UI_FONT}";
+            font-size: {btn_fs}px;
+            font-weight: 600;
+        }}
+        QPushButton:hover:enabled {{
+            background-color: {t['bg_btn_hover']};
+            border: 1px solid {t['border_focus']};
+        }}
+        QPushButton:disabled {{
+            background-color: {t['bg_btn_disabled']};
+            color: {t['text_dim']};
+            border: 1px solid {t['border']};
+        }}
+        QPushButton#AccentBtn {{
+            background-color: {t['bg_accent']};
+            color: #ffffff;
+            border: none;
+        }}
+        QPushButton#AccentBtn:hover:enabled {{
+            background-color: {t['bg_accent_hover']};
+        }}
+        QPushButton#AccentBtn:disabled {{
+            background-color: {t['bg_btn_disabled']};
+            color: {t['text_dim']};
+            border: 1px solid {t['border']};
+        }}
+        QPushButton#DangerBtn {{
+            background-color: {t['bg_danger']};
+            color: {"#ef4444" if self.theme_mode == "light" else "#ffffff"};
+            border: 1px solid {t['border']};
+        }}
+        QPushButton#DangerBtn:hover:enabled {{
+            background-color: {t['bg_danger_hover']};
+            border: 1px solid {t['danger_border']};
+        }}
+        QPushButton#StopBtn {{
+            background-color: {t['bg_danger']};
+            color: {"#dc2626" if self.theme_mode == "light" else "#ffffff"};
+            border: 1.5px solid {t['danger_border']};
+            padding: 0px;
+        }}
+        QPushButton#StopBtn:hover:enabled {{
+            background-color: {t['bg_danger_hover']};
+            border: 1.5px solid #ff5555;
+        }}
+        QProgressBar#ThinProgress {{
+            background-color: {t['border']};
+            border: none;
+            border-radius: 1px;
+        }}
+        QProgressBar#ThinProgress::chunk {{
+            background-color: {t['bg_accent']};
+            border-radius: 1px;
+        }}
+        QFrame#SettingsCard {{
+            background-color: {t['bg_popup']};
+            border: 1px solid {t['border_focus']};
+            border-radius: 8px;
+        }}
+        QFrame#SeparatorLine {{
+            color: {t['border']};
+        }}
+        QLabel {{
+            color: {t['text_main']};
+        }}
+        QMenu {{
+            background-color: {t['bg_popup']};
+            color: {t['text_main']};
+            border: 1px solid {t['border']};
+            padding: 4px;
+        }}
+        QMenu::item {{
+            padding: 5px 18px;
+            border-radius: 4px;
+        }}
+        QMenu::item:selected {{
+            background-color: {t['bg_accent']};
+            color: #ffffff;
+        }}
+        QScrollBar:vertical {{
+            background: transparent;
+            width: 8px;
+            margin: 2px;
+        }}
+        QScrollBar::handle:vertical {{
+            background: {t['scroll_handle']};
+            min-height: 24px;
+            border-radius: 4px;
+        }}
+        QScrollBar::handle:vertical:hover {{
+            background: {t['scroll_hover']};
+        }}
+        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical,
+        QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
+            background: none;
+            height: 0px;
+        }}
+        """
+        self.setStyleSheet(qss)
+        self._update_settings_active_buttons(animated=False)
+
+    def _update_settings_active_buttons(self, animated=True):
+        for mode_id, btn in (("dark", self.btn_theme_dark), ("amoled", self.btn_theme_amoled), ("light", self.btn_theme_light)):
+            if animated:
+                btn.set_active_animated(self.theme_mode == mode_id)
+            else:
+                btn.sync_active_immediate(self.theme_mode == mode_id)
+
+        if animated:
+            self.btn_lang_ru.set_active_animated(self.ui_lang == "ru")
+            self.btn_lang_en.set_active_animated(self.ui_lang == "en")
+        else:
+            self.btn_lang_ru.sync_active_immediate(self.ui_lang == "ru")
+            self.btn_lang_en.sync_active_immediate(self.ui_lang == "en")
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Type.MouseButtonPress:
+            gp = event.globalPosition().toPoint()
+            local_pt = self.mapFromGlobal(gp)
+            all_selectors = [self.dd_src, self.dd_tgt, self.dd_model, self.dd_vision_model, self.dd_scale]
+            for sel in all_selectors:
+                if sel.popup.isVisible():
+                    if not sel.popup.geometry().contains(local_pt) and not sel.geometry().contains(sel.parentWidget().mapFrom(self, local_pt)):
+                        sel.close_popup()
+            if self.settings_card.isVisible():
+                btn_rect = QRect(self.btn_settings.mapTo(self, QPoint(0, 0)), self.btn_settings.size())
+                vis_pop_contains = self.dd_vision_model.popup.isVisible() and self.dd_vision_model.popup.geometry().contains(local_pt)
+                sc_pop_contains = self.dd_scale.popup.isVisible() and self.dd_scale.popup.geometry().contains(local_pt)
+                if not self.settings_card.geometry().contains(local_pt) and not btn_rect.contains(local_pt) and not vis_pop_contains and not sc_pop_contains:
+                    self._hide_settings_card_animated()
+        return super().eventFilter(obj, event)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        for sel in (self.dd_src, self.dd_tgt, self.dd_model, self.dd_vision_model, self.dd_scale):
+            if sel.popup.isVisible():
+                sel.sync_position()
+        if self.settings_card.isVisible():
+            self._sync_settings_popup_position()
+        self._apply_elided_status_text()
+
+    def _close_all_popups(self, except_widget=None):
+        for sel in (self.dd_src, self.dd_tgt, self.dd_model, self.dd_vision_model, self.dd_scale):
+            if sel is not except_widget:
+                sel.close_popup()
+        if except_widget not in ("settings", self.dd_vision_model, self.dd_scale):
+            self._hide_settings_card_animated()
+
+    def _toggle_settings_popup(self):
+        if self.settings_card.isVisible() and not self._set_closing:
+            self._hide_settings_card_animated()
+        else:
+            self._close_all_popups(except_widget="settings")
+            self.settings_card.adjustSize()
+            self._sync_settings_popup_position()
+            self._set_fade.stop()
+            self._set_closing = False
+            self._set_opacity.setOpacity(0.0)
+            self.settings_card.show()
+            self.settings_card.raise_()
+            self._set_fade.setStartValue(0.0)
+            self._set_fade.setEndValue(1.0)
+            self._set_fade.start()
+
+    def _sync_settings_popup_position(self):
+        self.settings_card.adjustSize()
+        pw = self.settings_card.width()
+        ph = self.settings_card.height()
+        btn_pos = self.btn_settings.mapTo(self, QPoint(0, 0))
+        x = min(max(8, btn_pos.x() + self.btn_settings.width() - pw), max(8, self.width() - pw - 8))
+        y = max(8, btn_pos.y() - ph - 6)
+        self.settings_card.move(x, y)
+
+    def apply_theme(self, mode):
+        if mode not in THEME_PALETTES:
+            return
+        self.theme_mode = mode
+        THEME.update(THEME_PALETTES[mode])
+        self._apply_stylesheet()
+        self._update_settings_active_buttons(animated=True)
+        self._refresh_button_icons()
+        self._refresh_model_dropdown_labels()
+        self.md_highlighter.rehighlight()
+        for sw in (self.chk_auto, self.chk_pin, self.chk_smart, self.chk_thinking):
+            sw.update()
+        if self._tw_main_target or self._tw_mismatch_warning:
+            show_dict = self._tw_stream_finished and int(self._tw_displayed_chars) >= len(self._tw_main_target)
+            self._render_phased_output(
+                self._tw_main_target[:int(self._tw_displayed_chars)],
+                self._tw_dict_sections if show_dict else [],
+                self._tw_is_dict_mode,
+                self._tw_word,
+                self._tw_mismatch_warning,
+                dict_pending=(self._tw_is_dict_mode and not self._tw_stream_finished and int(self._tw_displayed_chars) >= len(self._tw_main_target))
+            )
+        self._save_config()
+
+    def set_ui_language(self, new_lang):
+        if new_lang not in ("ru", "en") or new_lang == self.ui_lang:
+            return
+        src_canon = self.auto_detect_mode if self.auto_detect_mode else self._lang_to_canonical(self.dd_src.get())
+        tgt_raw = self.dd_tgt.get()
+        tgt_is_ph = tgt_raw in ALL_LANG_PLACEHOLDERS
+        tgt_canon = "" if tgt_is_ph else self._lang_to_canonical(tgt_raw)
+
+        self.ui_lang = new_lang
+        self.chk_auto.setText(self._tr("auto_trans_chk"))
+        self.chk_auto.updateGeometry()
+        self.btn_server.setText(self._tr("server_btn"))
+        self.btn_instant.setText(self._tr("instant_btn"))
+
+        self.lbl_set_title.setText(self._tr("settings_title"))
+        self.chk_pin.setText(self._tr("settings_pin"))
+        self.chk_smart.setText(self._tr("smart_search_sw"))
+        self.chk_thinking.setText(self._tr("settings_thinking"))
+        self.lbl_set_vision.setText(self._tr("settings_vision_model"))
+        self.lbl_set_theme.setText(self._tr("settings_theme"))
+        self.btn_theme_dark.setText(self._tr("theme_dark"))
+        self.btn_theme_amoled.setText(self._tr("theme_amoled"))
+        self.btn_theme_light.setText(self._tr("theme_light"))
+        self.lbl_set_scale.setText(self._tr("settings_scale"))
+        self.lbl_set_lang.setText(self._tr("settings_lang"))
+
+        self._refresh_all_tooltips()
+
+        self.dd_src.configure_values(self._get_localized_world_languages())
+        self.dd_tgt.configure_values(self._get_localized_target_languages())
+
+        if self.auto_detect_mode:
+            self.dd_src.set(self._format_auto_detect_display(self.auto_detect_mode, self.detected_src_lang))
+        else:
+            self.dd_src.set(self._lang_to_display(src_canon))
+
+        if tgt_is_ph or not tgt_canon:
+            self.dd_tgt.set(self._tr("select_lang"))
+        else:
+            self.dd_tgt.set(self._lang_to_display(tgt_canon))
+
+        cur_mod = strip_loaded_prefix(self.dd_model.get())
+        if cur_mod in ALL_MODEL_PLACEHOLDERS:
+            if not self._is_online:
+                self.dd_model.set(self._tr("offline_model"))
+            else:
+                self.dd_model.set(self._tr("select_model"))
+                self.model_id = self._tr("select_model")
+
+        if self._attached_image_b64:
+            self._update_image_banner_ui()
+
+        if not self._anim_running:
+            if self._tw_mismatch_langs:
+                _, st_msg = self._build_mismatch_texts(*self._tw_mismatch_langs)
+                self._set_status_raw(st_msg, "#f59e0b")
+            elif self._is_online:
+                if self._is_valid_model_selected():
+                    self._set_status_raw(self._tr("lms_online"), "#22c55e")
+                else:
+                    self._set_status_raw(self._tr("choose_model_bottom"), "#eab308")
+            else:
+                self._set_status_raw(self._tr("server_failed"), "#ef4444")
+
+        self._refresh_model_dropdown_labels()
+        self._update_settings_active_buttons(animated=True)
+        if self.settings_card.isVisible():
+            self._sync_settings_popup_position()
+        self._save_config()
+
+    def _refresh_all_tooltips(self):
+        self.btn_swap.setToolTip(self._tr("tip_swap"))
+        self.btn_img.setToolTip(self._tr("tip_image"))
+        self.btn_img_remove.setToolTip(self._tr("tip_remove_img"))
+        self.btn_tts.setToolTip(self._tr("tip_tts"))
+        self.btn_go.setToolTip(self._tr("tip_go"))
+        self.btn_stop.setToolTip(self._tr("tip_stop"))
+        self.chk_auto.setToolTip(self._tr("tip_auto_chk"))
+        self.btn_refresh.setToolTip(self._tr("tip_refresh"))
+        self.btn_server.setToolTip(self._tr("tip_server"))
+        self.btn_load_model.setToolTip(self._tr("tip_load_model"))
+        self.btn_vram.setToolTip(self._tr("tip_vram"))
+        self.btn_settings.setToolTip(self._tr("tip_settings"))
 
     def _lang_to_canonical(self, val):
         if not val:
@@ -1968,13 +3138,10 @@ class LLMTranslateApp(ctk.CTk):
         clean = strip_flag_prefix(val)
         if clean in ALL_LANG_PLACEHOLDERS:
             return ""
-        if (
-            clean in ("Auto Detect", "Автоопределение")
-            or clean.startswith("Auto Detect (")
-            or clean.startswith("Автоопределение (")
-            or clean.startswith("Авто (")
-        ):
-            return "Auto Detect"
+        if clean in ("Auto AI", "Автоопределение (ИИ)", "Auto Detect (AI)", "Auto Detect", "Автоопределение") or clean.startswith("Авто ИИ (") or clean.startswith("Auto AI ("):
+            return "Auto AI"
+        if clean in ("Auto Fast", "Автоопределение (Быстрое)", "Auto Detect (Fast)") or clean.startswith("Авто (") or clean.startswith("Auto ("):
+            return "Auto Fast"
         if clean in LANG_DATA:
             return clean
         low = clean.lower()
@@ -1989,18 +3156,21 @@ class LLMTranslateApp(ctk.CTk):
         if not canon_lang or canon_lang in ALL_LANG_PLACEHOLDERS:
             return self._tr("select_lang")
         canon = self._lang_to_canonical(canon_lang)
-        if canon == "Auto Detect":
-            return self._tr("auto_detect")
-        if self.ui_lang == "ru":
-            return LANG_EN_TO_RU.get(canon, canon)
-        return canon
+        if canon == "Auto AI":
+            return self._tr("auto_ai")
+        if canon == "Auto Fast":
+            return self._tr("auto_fast")
+        return LANG_EN_TO_RU.get(canon, canon) if self.ui_lang == "ru" else canon
 
-    def _format_auto_detect_display(self, detected_canon=None):
-        if not detected_canon:
-            return self._tr("auto_detect")
-        det_disp = self._lang_to_display(detected_canon)
-        prefix = self._tr("auto_short")
-        return f"{prefix} ({det_disp})"
+    def _format_auto_detect_display(self, mode, detected_canon=None):
+        if mode == "fast":
+            if not detected_canon:
+                return self._tr("auto_fast")
+            return f"{self._tr('auto_fast_short')} ({self._lang_to_display(detected_canon)})"
+        else:
+            if not detected_canon:
+                return self._tr("auto_ai")
+            return f"{self._tr('auto_ai_short')} ({self._lang_to_display(detected_canon)})"
 
     def _get_localized_world_languages(self):
         return [self._lang_to_display(k) for k in WORLD_LANGUAGES_EN]
@@ -2015,10 +3185,6 @@ class LLMTranslateApp(ctk.CTk):
         if self.ui_lang == "en":
             if h in POS_RU_TO_EN:
                 return POS_RU_TO_EN[h]
-            if "/" in h:
-                parts = [p.strip() for p in h.split("/")]
-                trans_parts = [POS_RU_TO_EN.get(p, POS_TOKEN_RU_TO_EN.get(p, p)) for p in parts]
-                return " / ".join(trans_parts)
             res = h
             for ru_k, en_v in POS_TOKEN_RU_TO_EN.items():
                 res = res.replace(ru_k, en_v)
@@ -2026,10 +3192,6 @@ class LLMTranslateApp(ctk.CTk):
         else:
             if h in POS_EN_TO_RU:
                 return POS_EN_TO_RU[h]
-            if "/" in h:
-                parts = [p.strip() for p in h.split("/")]
-                trans_parts = [POS_EN_TO_RU.get(p, POS_TOKEN_EN_TO_RU.get(p, p)) for p in parts]
-                return " / ".join(trans_parts)
             res = h
             for en_k, ru_v in POS_TOKEN_EN_TO_RU.items():
                 res = res.replace(en_k, ru_v)
@@ -2038,279 +3200,10 @@ class LLMTranslateApp(ctk.CTk):
     def _build_mismatch_texts(self, src_canon, det_canon):
         src_disp = self._lang_to_display(src_canon)
         det_disp = self._lang_to_display(det_canon)
-        banner = self._tr("mismatch_warn", src=src_disp, det=det_disp)
-        status = self._tr("mismatch_status", det=det_disp, src=src_disp)
-        return banner, status
-
-    def _sync_server_button_visibility(self):
-        try:
-            if self._is_online:
-                if self.btn_server.winfo_manager():
-                    self.btn_server.grid_remove()
-                    self.after(20, self.dd_model._refresh_display_text)
-            else:
-                if not self.btn_server.winfo_manager():
-                    self.btn_server.grid(row=0, column=2, padx=2)
-                    self.after(20, self.dd_model._refresh_display_text)
-        except Exception:
-            pass
-
-    def _sync_vram_button_visibility(self):
-        try:
-            clean_cur = strip_loaded_prefix(self.model_id)
-            valid_selected = self._is_valid_model_selected()
-            cur_is_loaded = valid_selected and (clean_cur in self._loaded_vram_models)
-            any_loaded = len(self._loaded_vram_models) > 0
-
-            if not self._is_online:
-                if hasattr(self, "btn_vram") and self.btn_vram.winfo_manager():
-                    self.btn_vram.grid_remove()
-                if hasattr(self, "btn_load_model") and self.btn_load_model.winfo_manager():
-                    self.btn_load_model.grid_remove()
-            elif cur_is_loaded or (not valid_selected and any_loaded):
-                if hasattr(self, "btn_load_model") and self.btn_load_model.winfo_manager():
-                    self.btn_load_model.grid_remove()
-                if hasattr(self, "btn_vram") and not self.btn_vram.winfo_manager():
-                    self.btn_vram.grid(row=0, column=3, padx=2)
-            elif valid_selected and not cur_is_loaded:
-                if hasattr(self, "btn_vram") and self.btn_vram.winfo_manager():
-                    self.btn_vram.grid_remove()
-                if hasattr(self, "btn_load_model") and not self.btn_load_model.winfo_manager():
-                    self.btn_load_model.grid(row=0, column=3, padx=2)
-            else:
-                if hasattr(self, "btn_vram") and self.btn_vram.winfo_manager():
-                    self.btn_vram.grid_remove()
-                if hasattr(self, "btn_load_model") and self.btn_load_model.winfo_manager():
-                    self.btn_load_model.grid_remove()
-
-            self.after(20, self.dd_model._refresh_display_text)
-        except Exception:
-            pass
-
-    def _toggle_settings_popup(self):
-        if self.settings_win and self.settings_win.winfo_exists() and self.settings_win.winfo_ismapped():
-            self._close_settings_popup()
-        else:
-            self._close_all_dropdowns(except_dd="settings")
-            self._open_settings_popup()
-
-    def _open_settings_popup(self):
-        if self.settings_win and self.settings_win.winfo_exists():
-            try:
-                self.settings_win.destroy()
-            except Exception:
-                pass
-
-        self.settings_win = tk.Frame(self, bg=THEME["border_focus"], padx=1, pady=1, bd=0, highlightthickness=0)
-
-        card = tk.Frame(self.settings_win, bg=THEME["bg_popup"], bd=0, highlightthickness=0)
-        card.pack(fill="both", expand=True)
-
-        self.lbl_set_title = tk.Label(
-            card, text=self._tr("settings_title"),
-            font=(UI_FONT, 10, "bold"), fg=THEME["text_muted"], bg=THEME["bg_popup"], anchor="w"
+        return (
+            self._tr("mismatch_warn", src=src_disp, det=det_disp),
+            self._tr("mismatch_status", det=det_disp, src=src_disp)
         )
-        self.lbl_set_title.pack(fill="x", padx=14, pady=(10, 6))
-
-        sep = tk.Frame(card, bg=THEME["border_subtle"], height=1)
-        sep.pack(fill="x", padx=12, pady=(0, 6))
-
-        row_pin = tk.Frame(card, bg=THEME["bg_popup"])
-        row_pin.pack(fill="x", padx=14, pady=5)
-        self.lbl_set_pin = tk.Label(
-            row_pin, text=self._tr("settings_pin"),
-            font=(UI_FONT, 11), fg=THEME["text_main"], bg=THEME["bg_popup"], anchor="w"
-        )
-        self.lbl_set_pin.pack(side="left", fill="x", expand=True)
-
-        self.sw_pin = ctk.CTkSwitch(
-            row_pin, text="", width=40, switch_width=36, switch_height=19,
-            command=self._toggle_pin
-        )
-        self.sw_pin.pack(side="right")
-        if self.pin_window:
-            self.sw_pin.select()
-        else:
-            self.sw_pin.deselect()
-
-        row_smart = tk.Frame(card, bg=THEME["bg_popup"])
-        row_smart.pack(fill="x", padx=14, pady=5)
-        smart_title = "Умный поиск" if self.ui_lang == "ru" else "Smart Search"
-        self.lbl_set_smart = tk.Label(
-            row_smart, text=smart_title,
-            font=(UI_FONT, 11), fg=THEME["text_main"], bg=THEME["bg_popup"], anchor="w"
-        )
-        self.lbl_set_smart.pack(side="left", fill="x", expand=True)
-
-        self.sw_smart = ctk.CTkSwitch(
-            row_smart, text="", width=40, switch_width=36, switch_height=19,
-            command=self._toggle_smart_search
-        )
-        self.sw_smart.pack(side="right")
-        if self.use_smart_search:
-            self.sw_smart.select()
-        else:
-            self.sw_smart.deselect()
-
-        row_lang = tk.Frame(card, bg=THEME["bg_popup"])
-        row_lang.pack(fill="x", padx=14, pady=(6, 12))
-        self.lbl_set_lang = tk.Label(
-            row_lang, text=self._tr("settings_lang"),
-            font=(UI_FONT, 11), fg=THEME["text_main"], bg=THEME["bg_popup"], anchor="w"
-        )
-        self.lbl_set_lang.pack(side="left", fill="x", expand=True, padx=(0, 8))
-
-        lang_btns_frame = tk.Frame(row_lang, bg=THEME["bg_popup"])
-        lang_btns_frame.pack(side="right")
-
-        self.btn_lang_ru = ctk.CTkButton(
-            lang_btns_frame,
-            text="RU",
-            image=self.flag_ctk_icons.get("ru"),
-            compound="left",
-            width=58,
-            height=26,
-            corner_radius=6,
-            font=(UI_FONT, 11, "bold"),
-            fg_color=THEME["bg_accent"] if self.ui_lang == "ru" else THEME["bg_btn"],
-            hover_color=THEME["bg_accent_hover"] if self.ui_lang == "ru" else THEME["bg_btn_hover"],
-            command=lambda: self.set_ui_language("ru")
-        )
-        self.btn_lang_ru.pack(side="left", padx=(0, 4))
-
-        self.btn_lang_en = ctk.CTkButton(
-            lang_btns_frame,
-            text="EN",
-            image=self.flag_ctk_icons.get("gb"),
-            compound="left",
-            width=58,
-            height=26,
-            corner_radius=6,
-            font=(UI_FONT, 11, "bold"),
-            fg_color=THEME["bg_accent"] if self.ui_lang == "en" else THEME["bg_btn"],
-            hover_color=THEME["bg_accent_hover"] if self.ui_lang == "en" else THEME["bg_btn_hover"],
-            command=lambda: self.set_ui_language("en")
-        )
-        self.btn_lang_en.pack(side="left")
-
-        self.settings_win.update_idletasks()
-        self._sync_settings_popup_position()
-
-    def _sync_settings_popup_position(self):
-        if not self.settings_win or not self.settings_win.winfo_exists():
-            return
-        try:
-            self.update_idletasks()
-            self.settings_win.update_idletasks()
-            try:
-                scale = self._get_widget_scaling()
-            except Exception:
-                scale = 1.0
-            pw = max(self.settings_win.winfo_reqwidth(), int(275 * scale))
-            ph = max(self.settings_win.winfo_reqheight(), int(150 * scale))
-            bx = self.btn_settings.winfo_rootx() - self.winfo_rootx()
-            by = self.btn_settings.winfo_rooty() - self.winfo_rooty()
-            bw = self.btn_settings.winfo_width()
-            root_w = self.winfo_width()
-
-            x = min(max(8, bx + bw - pw), max(8, root_w - pw - 8))
-            y = max(8, by - ph - max(int(6 * scale), 6))
-            self.settings_win.place(x=x, y=y, width=pw, height=ph)
-            self.settings_win.lift()
-        except Exception:
-            pass
-
-    def _close_settings_popup(self):
-        if self.settings_win and self.settings_win.winfo_exists():
-            try:
-                self.settings_win.place_forget()
-            except Exception:
-                pass
-
-    def set_ui_language(self, new_lang):
-        if new_lang not in ("ru", "en") or new_lang == self.ui_lang:
-            return
-        self.toggle_ui_language()
-
-    def toggle_ui_language(self):
-        src_canon = "Auto Detect" if self.is_auto_detect else self._lang_to_canonical(self.dd_src.get())
-        tgt_raw = self.dd_tgt.get()
-        tgt_is_placeholder = tgt_raw in ALL_LANG_PLACEHOLDERS
-        tgt_canon = "" if tgt_is_placeholder else self._lang_to_canonical(tgt_raw)
-
-        self.ui_lang = "en" if self.ui_lang == "ru" else "ru"
-        self.chk_auto.configure(text=self._tr("auto_trans_chk"))
-        self.btn_server.configure(text=self._tr("server_btn"))
-        self.btn_instant.configure(text=self._tr("instant_btn"))
-
-        if self.settings_win and self.settings_win.winfo_exists():
-            try:
-                self.lbl_set_title.configure(text=self._tr("settings_title"))
-                self.lbl_set_pin.configure(text=self._tr("settings_pin"))
-                self.lbl_set_smart.configure(text="Умный поиск" if self.ui_lang == "ru" else "Smart Search")
-                self.lbl_set_lang.configure(text=self._tr("settings_lang"))
-                self.btn_lang_ru.configure(
-                    fg_color=THEME["bg_accent"] if self.ui_lang == "ru" else THEME["bg_btn"],
-                    hover_color=THEME["bg_accent_hover"] if self.ui_lang == "ru" else THEME["bg_btn_hover"]
-                )
-                self.btn_lang_en.configure(
-                    fg_color=THEME["bg_accent"] if self.ui_lang == "en" else THEME["bg_btn"],
-                    hover_color=THEME["bg_accent_hover"] if self.ui_lang == "en" else THEME["bg_btn_hover"]
-                )
-                self._sync_settings_popup_position()
-            except Exception:
-                pass
-
-        self.dd_src.configure_values(self._get_localized_world_languages())
-        self.dd_tgt.configure_values(self._get_localized_target_languages())
-
-        if self.is_auto_detect:
-            self.dd_src.set(self._format_auto_detect_display(self.detected_src_lang))
-        else:
-            self.dd_src.set(self._lang_to_display(src_canon))
-
-        if tgt_is_placeholder or not tgt_canon:
-            self.dd_tgt.set(self._tr("select_lang"))
-        else:
-            self.dd_tgt.set(self._lang_to_display(tgt_canon))
-
-        cur_mod = strip_loaded_prefix(self.dd_model.get())
-        if cur_mod in ALL_MODEL_PLACEHOLDERS:
-            if not self._is_online:
-                self.dd_model.set(self._tr("offline_model"))
-            else:
-                self.dd_model.set(self._tr("select_model"))
-                self.model_id = self._tr("select_model")
-        self._refresh_model_dropdown_labels()
-        self._rebuild_context_menus()
-
-        if self._tw_mismatch_langs:
-            s_c, d_c = self._tw_mismatch_langs
-            new_banner, new_status = self._build_mismatch_texts(s_c, d_c)
-            self._tw_mismatch_warning = new_banner
-            self._tw_final_status_msg = new_status
-            if not self._anim_running:
-                self._stop_status_anim(new_status, "#f59e0b", 1.0)
-        elif not self._anim_running:
-            if self._is_online:
-                if self._is_valid_model_selected():
-                    self._stop_status_anim(self._tr("lms_online"), "#22c55e", 0.0)
-                else:
-                    self._stop_status_anim(self._tr("choose_model_bottom"), "#eab308", 0.0)
-            else:
-                self._stop_status_anim(self._tr("server_failed"), "#ef4444", 0.0)
-
-        if self._tw_main_target or self._tw_mismatch_warning:
-            show_dict = self._tw_stream_finished and int(self._tw_displayed_chars) >= len(self._tw_main_target)
-            self._render_phased_output(
-                self._tw_main_target[:int(self._tw_displayed_chars)],
-                self._tw_dict_sections if show_dict else [],
-                self._tw_is_dict_mode,
-                self._tw_word,
-                self._tw_mismatch_warning,
-                dict_pending=(self._tw_is_dict_mode and not self._tw_stream_finished and int(self._tw_displayed_chars) >= len(self._tw_main_target))
-            )
-        self._save_config()
 
     def _load_config(self):
         if not os.path.isfile(CONFIG_PATH):
@@ -2319,298 +3212,982 @@ class LLMTranslateApp(ctk.CTk):
             with open(CONFIG_PATH, "r", encoding="utf-8") as f:
                 cfg = json.load(f)
 
-            lang = cfg.get("ui_lang", "ru")
-            if lang in ("ru", "en") and lang != self.ui_lang:
-                self.ui_lang = lang
-                self.chk_auto.configure(text=self._tr("auto_trans_chk"))
-                self.use_smart_search = bool(cfg.get("smart_search", False))
-                self.btn_server.configure(text=self._tr("server_btn"))
-                self.btn_instant.configure(text=self._tr("instant_btn"))
-                self._set_status_label(self._tr("connecting"), THEME["text_muted"])
-                self._rebuild_context_menus()
-
             self.dd_src.configure_values(self._get_localized_world_languages())
             self.dd_tgt.configure_values(self._get_localized_target_languages())
 
-            src_lang_raw = cfg.get("src_lang", "Auto Detect")
-            src_canon = self._lang_to_canonical(src_lang_raw)
-            if not src_canon or src_canon == "Auto Detect":
-                self.is_auto_detect = True
-                self.dd_src.set(self._format_auto_detect_display(None))
+            src_canon = self._lang_to_canonical(cfg.get("src_lang", "Auto AI"))
+            if not src_canon or src_canon == "Auto AI":
+                self.auto_detect_mode = "ai"
+                self.dd_src.set(self._format_auto_detect_display("ai", None))
+            elif src_canon == "Auto Fast":
+                self.auto_detect_mode = "fast"
+                self.dd_src.set(self._format_auto_detect_display("fast", None))
             else:
-                self.is_auto_detect = False
+                self.auto_detect_mode = None
                 self.dd_src.set(self._lang_to_display(src_canon))
 
-            tgt_lang_raw = cfg.get("tgt_lang", "")
-            if not tgt_lang_raw or tgt_lang_raw in ALL_LANG_PLACEHOLDERS:
+            tgt_raw = cfg.get("tgt_lang", "")
+            if not tgt_raw or tgt_raw in ALL_LANG_PLACEHOLDERS:
                 self.dd_tgt.set(self._tr("select_lang"))
             else:
-                tgt_canon = self._lang_to_canonical(tgt_lang_raw)
-                self.dd_tgt.set(self._lang_to_display(tgt_canon))
+                self.dd_tgt.set(self._lang_to_display(self._lang_to_canonical(tgt_raw)))
 
             saved_model = strip_loaded_prefix(cfg.get("model_id", self._tr("select_model")))
             if saved_model and saved_model not in ALL_MODEL_PLACEHOLDERS:
                 self._saved_config_model = saved_model
 
-            if cfg.get("auto_translate", True):
-                self.chk_auto.select()
-            else:
-                self.chk_auto.deselect()
+            self.chk_auto.setChecked(bool(cfg.get("auto_translate", True)))
+            self.enable_thinking = bool(cfg.get("enable_thinking", False))
+            self.chk_thinking.setChecked(self.enable_thinking)
 
-            if cfg.get("smart_search", False):
-                self.sw_smart.select()
-                self.use_smart_search = True
-            else:
-                self.sw_smart.deselect()
-                self.use_smart_search = False
+            saved_vis = strip_loaded_prefix(cfg.get("vision_model_id", ""))
+            self.vision_model_id = saved_vis if saved_vis not in ALL_MODEL_PLACEHOLDERS else ""
+
+            self.use_smart_search = bool(cfg.get("smart_search", False))
+            self.chk_smart.setChecked(self.use_smart_search)
 
             self.pin_window = bool(cfg.get("pin_window", False))
-            self.attributes("-topmost", self.pin_window)
+            self.chk_pin.setChecked(self.pin_window)
+            self._apply_topmost_flag()
         except Exception:
             pass
 
     def _save_config(self):
         try:
-            src_val = "Auto Detect" if self.is_auto_detect else self._lang_to_canonical(self.dd_src.get())
+            if self.auto_detect_mode == "ai":
+                src_val = "Auto AI"
+            elif self.auto_detect_mode == "fast":
+                src_val = "Auto Fast"
+            else:
+                src_val = self._lang_to_canonical(self.dd_src.get())
             tgt_raw = self.dd_tgt.get()
             tgt_val = "" if tgt_raw in ALL_LANG_PLACEHOLDERS else self._lang_to_canonical(tgt_raw)
             clean_m = strip_loaded_prefix(self.model_id)
             model_val = clean_m if clean_m not in ALL_MODEL_PLACEHOLDERS else self._saved_config_model
             cfg = {
                 "ui_lang": self.ui_lang,
+                "theme_mode": self.theme_mode,
+                "ui_scale": self.ui_scale,
                 "src_lang": src_val,
                 "tgt_lang": tgt_val,
                 "model_id": model_val,
-                "auto_translate": bool(self.chk_auto.get()),
-                "smart_search": bool(self.use_smart_search),
-                "pin_window": bool(self.pin_window)
+                "auto_translate": self.chk_auto.isChecked(),
+                "enable_thinking": self.enable_thinking,
+                "vision_model_id": self.vision_model_id,
+                "smart_search": self.use_smart_search,
+                "pin_window": self.pin_window
             }
             with open(CONFIG_PATH, "w", encoding="utf-8") as f:
                 json.dump(cfg, f, ensure_ascii=False, indent=2)
         except Exception:
             pass
 
-    def _apply_app_icon(self):
-        ico_path = resource_path("logo.ico")
-        png_path = resource_path("logo.png")
+    def _apply_topmost_flag(self):
+        was_visible = self.isVisible()
+        self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, self.pin_window)
+        if was_visible:
+            self.show()
 
-        def _force_set_icon():
-            if IS_WIN and os.path.isfile(ico_path):
+    def _toggle_pin(self):
+        self.pin_window = self.chk_pin.isChecked()
+        self._apply_topmost_flag()
+        self._save_config()
+
+    def _toggle_smart_search(self):
+        self.use_smart_search = self.chk_smart.isChecked()
+        self._save_config()
+
+    def _toggle_thinking(self):
+        self.enable_thinking = self.chk_thinking.isChecked()
+        self._save_config()
+        has_content = bool(self.t_in.toPlainText().strip() or self._attached_image_b64)
+        if self.chk_auto.isChecked() and self._is_online and has_content:
+            self._force_trigger()
+
+    def _is_model_vision_capable(self, model_name):
+        clean = strip_loaded_prefix(model_name)
+        if not clean or clean in ALL_MODEL_PLACEHOLDERS:
+            return False
+        meta = self._model_meta.get(clean, {})
+        if meta.get("vision"):
+            return True
+        low = clean.lower()
+        return any(k in low for k in (
+            "vision", "-vl", "vl-", "llava", "pixtral", "minicpm-v", "gemma-3", "gemma3",
+            "qwen2-vl", "qwen2.5-vl", "qwen3-vl", "internvl", "moondream", "idefics", "molmo"
+        ))
+
+    def _get_available_vision_models(self):
+        vis = [m for m in self._available_models if self._is_model_vision_capable(m)]
+        vis.sort(key=lambda m: (
+            self._model_meta.get(m, {}).get("size_bytes") or float("inf"),
+            m.lower()
+        ))
+        return vis
+
+    def _get_vision_dropdown_items(self):
+        vis_models = self._get_available_vision_models()
+        auto_lbl = self._tr("vision_auto")
+        if not vis_models:
+            return [self._tr("no_vision_models")], self._tr("no_vision_models")
+        formatted = [auto_lbl] + [self._format_model_display(m) for m in vis_models]
+        if self.vision_model_id and self.vision_model_id in vis_models:
+            default_val = self._format_model_display(self.vision_model_id)
+        else:
+            default_val = auto_lbl
+        return formatted, default_val
+
+    def _on_vision_model_selected(self, val):
+        clean = strip_loaded_prefix(val)
+        if clean in ALL_MODEL_PLACEHOLDERS or clean == self._tr("vision_auto") or clean == self._tr("no_vision_models"):
+            self.vision_model_id = ""
+        else:
+            self.vision_model_id = clean
+        self._save_config()
+        if self._attached_image_b64:
+            self._update_image_banner_ui()
+            if self.chk_auto.isChecked() and self._is_online:
+                self._force_trigger()
+
+    def _resolve_effective_vision_model(self):
+        active_clean = strip_loaded_prefix(self.model_id)
+        if active_clean and active_clean not in ALL_MODEL_PLACEHOLDERS and self._is_model_vision_capable(active_clean):
+            return active_clean
+
+        vis_models = self._get_available_vision_models()
+        if self.vision_model_id and self.vision_model_id in vis_models:
+            return self.vision_model_id
+
+        if vis_models:
+            return vis_models[0]
+        return None
+
+    def _format_model_display(self, model_name):
+        clean = strip_loaded_prefix(model_name)
+        if clean in ALL_MODEL_PLACEHOLDERS or not clean:
+            return clean
+        prefix = LOADED_PREFIX if clean in self._loaded_vram_models else ""
+        meta = self._model_meta.get(clean, {})
+        size_str = meta.get("size_str", "")
+        suffix = f"{MODEL_SIZE_SEP}{size_str}" if size_str else ""
+        return f"{prefix}{clean}{suffix}"
+
+    def _sync_server_button_visibility(self):
+        self.btn_server.setVisible(not self._is_online)
+
+    def _sync_vram_button_visibility(self):
+        clean_cur = strip_loaded_prefix(self.model_id)
+        valid_selected = self._is_valid_model_selected()
+        cur_is_loaded = valid_selected and (clean_cur in self._loaded_vram_models)
+        any_loaded = len(self._loaded_vram_models) > 0
+
+        if not self._is_online:
+            self.btn_vram.hide()
+            self.btn_load_model.hide()
+        elif cur_is_loaded or (not valid_selected and any_loaded):
+            self.btn_load_model.hide()
+            self.btn_vram.show()
+        elif valid_selected and not cur_is_loaded:
+            self.btn_vram.hide()
+            self.btn_load_model.show()
+        else:
+            self.btn_vram.hide()
+            self.btn_load_model.hide()
+
+    def _refresh_model_dropdown_labels(self):
+        self._sync_vram_button_visibility()
+        if not self._is_online or not self._available_models:
+            return
+        placeholder = self._tr("select_model")
+        formatted_list = [placeholder] + [self._format_model_display(m) for m in self._available_models]
+        self.dd_model.configure_values(formatted_list)
+        if self._is_valid_model_selected():
+            self.dd_model.set(self._format_model_display(self.model_id))
+        else:
+            self.dd_model.set(placeholder)
+
+        vis_choices, vis_default = self._get_vision_dropdown_items()
+        self.dd_vision_model.configure_values(vis_choices)
+        self.dd_vision_model.set(vis_default)
+        if self._attached_image_b64:
+            self._update_image_banner_ui()
+
+    def _on_src_lang_selected(self, val):
+        canon = self._lang_to_canonical(val)
+        if canon == "Auto AI":
+            self.auto_detect_mode = "ai"
+            self.detected_src_lang = None
+            self.dd_src.set(self._format_auto_detect_display("ai", None))
+        elif canon == "Auto Fast":
+            self.auto_detect_mode = "fast"
+            self.detected_src_lang = None
+            self.dd_src.set(self._format_auto_detect_display("fast", None))
+        else:
+            self.auto_detect_mode = None
+            self.detected_src_lang = None
+            self.dd_src.set(self._lang_to_display(canon))
+        self._update_swap_button_state()
+        self._save_config()
+        if self.chk_auto.isChecked():
+            self._force_trigger()
+
+    def _on_tgt_lang_selected(self, val):
+        if val not in ALL_LANG_PLACEHOLDERS:
+            canon = self._lang_to_canonical(val)
+            if canon in AUTO_MODES_CANON:
+                self.dd_tgt.set(self._tr("select_lang"))
+            else:
+                self.dd_tgt.set(self._lang_to_display(canon))
+        self._update_swap_button_state()
+        self._save_config()
+        if self.chk_auto.isChecked():
+            self._force_trigger()
+
+    def _get_effective_src_mode(self):
+        if self.auto_detect_mode == "ai":
+            return "Auto AI"
+        if self.auto_detect_mode == "fast":
+            return "Auto Fast"
+        return self._lang_to_canonical(self.dd_src.get())
+
+    def _get_effective_tgt_lang(self):
+        raw = self.dd_tgt.get()
+        if raw in ALL_LANG_PLACEHOLDERS or not raw:
+            return ""
+        return self._lang_to_canonical(raw)
+
+    def _is_valid_model_selected(self):
+        clean = strip_loaded_prefix(self.model_id)
+        return bool(clean) and clean not in ALL_MODEL_PLACEHOLDERS
+
+    def _update_swap_button_state(self):
+        tgt_canon = self._get_effective_tgt_lang()
+        if not tgt_canon or tgt_canon in AUTO_MODES_CANON:
+            self._set_btn_enabled_with_cursor(self.btn_swap, False)
+            self._refresh_button_icons()
+            return
+        if self.auto_detect_mode:
+            can_swap = bool(self.detected_src_lang) and (self.detected_src_lang != tgt_canon)
+        else:
+            src_canon = self._get_effective_src_mode()
+            can_swap = bool(src_canon) and (src_canon not in AUTO_MODES_CANON) and (src_canon != tgt_canon)
+        self._set_btn_enabled_with_cursor(self.btn_swap, can_swap)
+        self._refresh_button_icons()
+
+    def _apply_elided_status_text(self):
+        avail_w = max(40, self.lbl_status.width() - 4)
+        fm = QFontMetrics(self.lbl_status.font())
+        elided = fm.elidedText(self._raw_status_text, Qt.TextElideMode.ElideRight, avail_w)
+        self.lbl_status.setText(elided)
+        self.lbl_status.setToolTip(self._raw_status_text)
+        self.lbl_status.setStyleSheet(f"color: {self._raw_status_color};")
+
+    def _set_status_raw(self, text, color):
+        self._raw_status_text = text
+        self._raw_status_color = color
+        self._apply_elided_status_text()
+
+    def _start_status_anim(self, phase_text, color="#eab308"):
+        self._anim_phase_text = phase_text
+        self._anim_color = color
+        self._anim_start_ts = time.monotonic()
+        self._anim_running = True
+        self.progress_bar.setRange(0, 0)
+
+    def _update_status_anim_phase(self, phase_text, color="#3b82f6"):
+        self._anim_phase_text = phase_text
+        self._anim_color = color
+
+    def _stop_status_anim(self, final_text, color="#22c55e", bar_fill=1.0):
+        self._anim_running = False
+        self._set_status_raw(final_text, color)
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(int(bar_fill * 100))
+
+    def _tick_status_anim(self):
+        if not self._anim_running:
+            return
+        frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+        spinner = frames[self._anim_step % len(frames)]
+        elapsed = time.monotonic() - self._anim_start_ts
+        unit = "s" if self.ui_lang == "en" else "с"
+        self._set_status_raw(f"{spinner} {self._anim_phase_text} ({elapsed:.1f}{unit})", self._anim_color)
+        self._anim_step += 1
+
+    def _mark_edited(self):
+        self._last_edit_time = time.monotonic()
+
+    def _realtime_watcher(self):
+        current_text = self.t_in.toPlainText().strip()
+        has_img = bool(self._attached_image_b64)
+        state_key = f"[IMG:{len(self._attached_image_b64)}]{current_text}" if has_img else current_text
+        elapsed = time.monotonic() - self._last_edit_time
+
+        if not current_text and not has_img:
+            if self._last_translated_state[0] != "" or self.detected_src_lang is not None:
+                self._abort_active_stream()
+                self.stop_tts()
+                self._last_translated_state = ("", "", "", "")
+                self._last_clean_translation = ""
+                self._tw_mismatch_langs = None
+                if self.auto_detect_mode:
+                    self.detected_src_lang = None
+                    self.dd_src.set(self._format_auto_detect_display(self.auto_detect_mode, None))
+                self._update_swap_button_state()
+                self.t_out.clear()
+                self.btn_instant.hide()
+                self._stop_status_anim(self._tr("ready"), "#22c55e" if self._is_online else THEME["text_muted"], 0.0)
+        elif self.chk_auto.isChecked() and self._is_online:
+            tgt_canon = self._get_effective_tgt_lang()
+            if not tgt_canon:
+                self._stop_status_anim(self._tr("choose_lang_right"), "#eab308", 0.0)
+            elif not has_img and not self._is_valid_model_selected():
+                self._stop_status_anim(self._tr("choose_model_bottom"), "#eab308", 0.0)
+            elif has_img and not self._resolve_effective_vision_model():
+                self._stop_status_anim(self._tr("no_vision_err"), "#ef4444", 0.0)
+            else:
+                src_mode = self._get_effective_src_mode()
+                eff_mod = self._resolve_effective_vision_model() if has_img else strip_loaded_prefix(self.model_id)
+                current_state = (state_key, src_mode, tgt_canon, f"{eff_mod}:{int(self.enable_thinking)}")
+                if current_state != self._last_translated_state and elapsed >= 0.35:
+                    self._last_translated_state = current_state
+                    self.start_translation()
+
+    def _auto_reconnect_loop(self):
+        if not self._is_online and not self._server_booting:
+            self.fetch_models(silent=True, auto_start_server=False)
+
+    def _force_trigger(self):
+        text = self.t_in.toPlainText().strip()
+        has_img = bool(self._attached_image_b64)
+        if not text and not has_img:
+            return
+        tgt_canon = self._get_effective_tgt_lang()
+        if not tgt_canon:
+            self._stop_status_anim(self._tr("choose_lang_right"), "#eab308", 0.0)
+            return
+        if has_img:
+            eff_mod = self._resolve_effective_vision_model()
+            if not eff_mod:
+                self._stop_status_anim(self._tr("no_vision_err"), "#ef4444", 0.0)
+                return
+        else:
+            if not self._is_valid_model_selected():
+                self._stop_status_anim(self._tr("choose_model_bottom"), "#eab308", 0.0)
+                return
+            eff_mod = strip_loaded_prefix(self.model_id)
+        src_mode = self._get_effective_src_mode()
+        state_key = f"[IMG:{len(self._attached_image_b64)}]{text}" if has_img else text
+        self._last_translated_state = (state_key, src_mode, tgt_canon, f"{eff_mod}:{int(self.enable_thinking)}")
+        self.start_translation()
+
+    def _attach_qimage(self, qimg, name="Clipboard"):
+        if qimg is None or qimg.isNull():
+            return False
+        w, h = qimg.width(), qimg.height()
+        max_dim = 1568
+        if max(w, h) > max_dim:
+            qimg = qimg.scaled(max_dim, max_dim, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+
+        buf = QBuffer()
+        buf.open(QIODevice.OpenModeFlag.WriteOnly)
+        qimg.save(buf, "JPEG", 88)
+        b64_str = base64.b64encode(bytes(buf.data())).decode("ascii")
+        buf.close()
+
+        thumb_pm = QPixmap.fromImage(qimg).scaled(48, 32, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+        self.lbl_img_thumb.setPixmap(thumb_pm)
+        self._attached_image_b64 = b64_str
+        self._attached_image_name = f"{name} ({w}x{h})"
+        self._update_image_banner_ui()
+        self.btn_img.setObjectName("AccentBtn")
+        self.btn_img.style().unpolish(self.btn_img)
+        self.btn_img.style().polish(self.btn_img)
+        self._refresh_button_icons()
+        self._mark_edited()
+        if self.chk_auto.isChecked():
+            QTimer.singleShot(60, self._force_trigger)
+        return True
+
+    def _update_image_banner_ui(self):
+        if not self._attached_image_b64:
+            self.img_banner.hide()
+            return
+        vis_mod = self._resolve_effective_vision_model()
+        if vis_mod:
+            sz = self._model_meta.get(vis_mod, {}).get("size_str", "")
+            sz_part = f" ({sz})" if sz else ""
+            vis_tag = f"  →  {vis_mod}{sz_part}"
+            self.lbl_img_vis_icon.show()
+        else:
+            vis_tag = f"  →  {self._tr('no_vision_models')}"
+            self.lbl_img_vis_icon.hide()
+        self.lbl_img_info.setText(f"{self._attached_image_name}{vis_tag}")
+        self.img_banner.show()
+
+    def clear_attached_image(self):
+        if not self._attached_image_b64:
+            return
+        self._attached_image_b64 = ""
+        self._attached_image_name = ""
+        self.img_banner.hide()
+        self.btn_img.setObjectName("")
+        self.btn_img.style().unpolish(self.btn_img)
+        self.btn_img.style().polish(self.btn_img)
+        self._refresh_button_icons()
+        self._mark_edited()
+
+    def select_image_file(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Image" if self.ui_lang == "en" else "Выберите изображение",
+            "",
+            "Images (*.png *.jpg *.jpeg *.webp *.bmp);;All files (*.*)"
+        )
+        if path and os.path.isfile(path):
+            qimg = QImage(path)
+            if not qimg.isNull():
+                self._attach_qimage(qimg, name=os.path.basename(path))
+
+    def _try_paste_image_from_clipboard(self):
+        cb = QApplication.clipboard()
+        qimg = cb.image()
+        if not qimg.isNull():
+            return self._attach_qimage(qimg, name="Clipboard")
+        md = cb.mimeData()
+        if md and md.hasUrls():
+            for u in md.urls():
+                local = u.toLocalFile()
+                if local and os.path.isfile(local) and local.lower().endswith((".png", ".jpg", ".jpeg", ".webp", ".bmp")):
+                    qi = QImage(local)
+                    if not qi.isNull():
+                        return self._attach_qimage(qi, name=os.path.basename(local))
+        return False
+
+    def _show_in_context_menu(self, pos):
+        menu = QMenu(self)
+        menu.setCursor(Qt.CursorShape.PointingHandCursor)
+        menu.addAction(self._tr("ctx_paste_cur"), self.t_in.paste)
+        menu.addAction(self._tr("ctx_paste_rep"), self._paste_replace_all)
+        menu.addAction(self._tr("ctx_paste_img"), self._try_paste_image_from_clipboard)
+        menu.addAction(self._tr("ctx_open_img"), self.select_image_file)
+        menu.addSeparator()
+        menu.addAction(self._tr("ctx_copy"), self.t_in.copy)
+        menu.addAction(self._tr("ctx_cut"), self.t_in.cut)
+        menu.addAction(self._tr("ctx_sel_all"), self.t_in.selectAll)
+        menu.addSeparator()
+        menu.addAction(self._tr("ctx_bold"), lambda: self._wrap_selection("**", "**"))
+        menu.addAction(self._tr("ctx_italic"), lambda: self._wrap_selection("*", "*"))
+        menu.addAction(self._tr("ctx_code"), lambda: self._wrap_selection("`", "`"))
+        menu.addAction(self._tr("ctx_strike"), lambda: self._wrap_selection("~~", "~~"))
+        menu.addSeparator()
+        menu.addAction(self._tr("ctx_clear"), self.clear_all)
+        menu.exec(self.t_in.mapToGlobal(pos))
+
+    def _show_out_context_menu(self, pos):
+        menu = QMenu(self)
+        menu.setCursor(Qt.CursorShape.PointingHandCursor)
+        menu.addAction(self._tr("ctx_copy_sel"), self._copy_out_selection_or_all)
+        menu.addAction(self._tr("ctx_copy_all"), self.copy_output)
+        menu.addSeparator()
+        menu.addAction(self._tr("ctx_sel_all"), self.t_out.selectAll)
+        menu.exec(self.t_out.mapToGlobal(pos))
+
+    def _paste_replace_all(self):
+        cb = QApplication.clipboard()
+        txt = cb.text()
+        if txt:
+            self.t_in.setPlainText(txt)
+            if self.chk_auto.isChecked():
+                self._force_trigger()
+        else:
+            self._try_paste_image_from_clipboard()
+
+    def _wrap_selection(self, pre, suf):
+        cur = self.t_in.textCursor()
+        sel = cur.selectedText()
+        cur.insertText(f"{pre}{sel}{suf}")
+        if not sel:
+            cur.movePosition(QTextCursor.MoveOperation.Left, QTextCursor.MoveMode.MoveAnchor, len(suf))
+            self.t_in.setTextCursor(cur)
+
+    def _copy_out_selection_or_all(self):
+        sel = self.t_out.textCursor().selectedText()
+        if sel.strip():
+            QApplication.clipboard().setText(sel.replace("\u2029", "\n"))
+            self._stop_status_anim(self._tr("copied_sel"), "#3b82f6", 1.0)
+        else:
+            self.copy_output()
+
+    def copy_output(self):
+        main_trans = self._extract_clean_main_output()
+        if main_trans:
+            QApplication.clipboard().setText(main_trans)
+            self._stop_status_anim(self._tr("copied"), "#3b82f6", 1.0)
+
+    def _extract_clean_main_output(self):
+        if self._last_clean_translation:
+            return self._last_clean_translation
+        text = self.t_out.toPlainText().strip()
+        if not text:
+            return ""
+        for wp in (UI_STRINGS["ru"]["warn_prefix"], UI_STRINGS["en"]["warn_prefix"]):
+            if text.startswith(wp) and "\n\n" in text:
+                text = text.split("\n\n", 1)[1].strip()
+        for dv in (UI_STRINGS["ru"]["dict_variants"], UI_STRINGS["en"]["dict_variants"]):
+            if f" — {dv}\n" in text:
+                return text.split("\n\n")[0].strip()
+        return text
+
+    def _abort_active_stream(self):
+        self._task_id += 1
+        self._tw_running = False
+        self.btn_instant.hide()
+        with self._stream_lock:
+            st = self._active_stream
+            self._active_stream = None
+        if st is not None:
+            try:
+                st.close()
+            except Exception:
+                pass
+
+    def clear_all(self):
+        self._abort_active_stream()
+        self.stop_tts()
+        self._last_translated_state = ("", "", "", "")
+        self._last_clean_translation = ""
+        self._tw_main_target = ""
+        self._tw_dict_sections = []
+        self._tw_mismatch_warning = ""
+        self._tw_mismatch_langs = None
+        self._tw_final_status_msg = ""
+        if self.auto_detect_mode:
+            self.detected_src_lang = None
+            self.dd_src.set(self._format_auto_detect_display(self.auto_detect_mode, None))
+        self._update_swap_button_state()
+        self.clear_attached_image()
+        self.t_in.clear()
+        self.t_out.clear()
+        self._reset_gen_buttons()
+        self._stop_status_anim(self._tr("ready"), "#22c55e" if self._is_online else THEME["text_muted"], 0.0)
+
+    def swap_languages(self):
+        tgt_canon = self._get_effective_tgt_lang()
+        if not tgt_canon or tgt_canon in AUTO_MODES_CANON:
+            return
+        src_canon = self.detected_src_lang if self.auto_detect_mode else self._get_effective_src_mode()
+        if not src_canon or src_canon in AUTO_MODES_CANON:
+            return
+
+        self.skip_typewriter_animation()
+        self.stop_tts()
+        self.auto_detect_mode = None
+        self.detected_src_lang = None
+        self.dd_src.set(self._lang_to_display(tgt_canon))
+        self.dd_tgt.set(self._lang_to_display(src_canon))
+        self._update_swap_button_state()
+        self._save_config()
+
+        main_part = self._extract_clean_main_output()
+        if main_part:
+            self.t_in.setPlainText(main_part)
+        if self.chk_auto.isChecked():
+            self._force_trigger()
+
+    # --- LM Studio CLI & Server Management ---
+    def _run_lms_cmd(self, args_list, timeout=15):
+        try:
+            return subprocess.run(
+                [LMS_BIN] + args_list,
+                shell=False,
+                timeout=timeout,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="ignore",
+                creationflags=subprocess.CREATE_NO_WINDOW if IS_WIN else 0
+            )
+        except Exception:
+            return None
+
+    def _boot_local_lm_studio_server(self):
+        self._server_booting = True
+        try:
+            self._run_lms_cmd(["daemon", "up"], timeout=8)
+            self._run_lms_cmd(["server", "start", "--port", str(LM_PORT), "--cors"], timeout=8)
+            self._run_lms_cmd(["server", "start"], timeout=6)
+
+            for _ in range(6):
+                for host in (LM_HOST, "localhost"):
+                    try:
+                        c = OpenAI(base_url=f"http://{host}:{LM_PORT}/v1", api_key="lm-studio", timeout=2.0)
+                        c.models.list()
+                        return True
+                    except Exception:
+                        pass
+                time.sleep(0.7)
+
+            if LM_STUDIO_GUI_EXE and os.path.isfile(LM_STUDIO_GUI_EXE):
                 try:
-                    self.iconbitmap(default=ico_path)
-                    self.iconbitmap(ico_path)
+                    if IS_WIN:
+                        si = subprocess.STARTUPINFO()
+                        si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                        si.wShowWindow = 7
+                        subprocess.Popen([LM_STUDIO_GUI_EXE, "--minimized"], startupinfo=si, creationflags=subprocess.CREATE_NO_WINDOW)
+                    else:
+                        subprocess.Popen([LM_STUDIO_GUI_EXE], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
                 except Exception:
                     pass
 
-            if os.path.isfile(png_path):
+                for _ in range(12):
+                    time.sleep(1.0)
+                    self._run_lms_cmd(["server", "start", "--port", str(LM_PORT), "--cors"], timeout=5)
+                    for host in (LM_HOST, "localhost"):
+                        try:
+                            c = OpenAI(base_url=f"http://{host}:{LM_PORT}/v1", api_key="lm-studio", timeout=2.0)
+                            c.models.list()
+                            return True
+                        except Exception:
+                            pass
+            return False
+        finally:
+            self._server_booting = False
+
+    def start_lm_studio_server_manual(self):
+        if self._server_booting:
+            return
+        self._start_status_anim(self._tr("starting_server"), "#eab308")
+
+        def worker():
+            ok = self._boot_local_lm_studio_server()
+            if ok:
+                QTimer.singleShot(0, lambda: self.fetch_models(silent=False, auto_start_server=False))
+            else:
+                self.sig.statusAnimStop.emit(self._tr("server_failed"), "#ef4444", 0.0)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    @staticmethod
+    def _resolve_disk_model_size(model_key, rel_path=""):
+        roots = [
+            os.path.expanduser("~/.lmstudio/models"),
+            os.path.expanduser("~/.cache/lm-studio/models"),
+        ]
+        if IS_WIN:
+            roots.extend([
+                os.path.expandvars(r"%USERPROFILE%\.lmstudio\models"),
+                os.path.expandvars(r"%USERPROFILE%\.cache\lm-studio\models"),
+            ])
+        for root in roots:
+            if not os.path.isdir(root):
+                continue
+            if rel_path:
+                cand = os.path.join(root, rel_path)
+                if os.path.isfile(cand):
+                    try:
+                        return os.path.getsize(cand)
+                    except Exception:
+                        pass
+            tail = model_key.split("/")[-1].lower()
+            if not tail:
+                continue
+            for dirpath, _, filenames in os.walk(root):
+                for fn in filenames:
+                    if fn.lower().endswith((".gguf", ".safetensors", ".bin")) and tail in fn.lower():
+                        try:
+                            return os.path.getsize(os.path.join(dirpath, fn))
+                        except Exception:
+                            pass
+        return 0
+
+    def _query_lms_ls_downloaded_models(self, known_api_names=None):
+        models = []
+        meta_map = {}
+        res = self._run_lms_cmd(["ls", "--json"], timeout=6)
+        if res and res.stdout:
+            try:
+                data = json.loads(res.stdout)
+                if isinstance(data, list):
+                    for item in data:
+                        m_key = item.get("modelKey") or item.get("id") or item.get("path")
+                        if not m_key or "embed" in m_key.lower():
+                            continue
+                        models.append(m_key)
+                        size_bytes = item.get("sizeBytes") or item.get("size") or 0
+                        rel_path = item.get("path") or ""
+                        if not size_bytes:
+                            size_bytes = self._resolve_disk_model_size(m_key, rel_path)
+                        size_str = format_bytes_size(size_bytes)
+                        if not size_str and item.get("paramsString"):
+                            size_str = str(item.get("paramsString"))
+                        meta_map[m_key] = {
+                            "size_bytes": size_bytes,
+                            "size_str": size_str,
+                            "vision": bool(item.get("vision", False)),
+                            "path": rel_path,
+                        }
+            except Exception:
+                pass
+
+        for api_name in (known_api_names or []):
+            if api_name not in meta_map:
+                sz = self._resolve_disk_model_size(api_name)
+                meta_map[api_name] = {
+                    "size_bytes": sz,
+                    "size_str": format_bytes_size(sz),
+                    "vision": any(v in api_name.lower() for v in ("vision", "-vl", "vl-", "llava", "pixtral", "minicpm-v", "gemma-3")),
+                    "path": "",
+                }
+
+        self._model_meta.update(meta_map)
+        return models
+
+    def _query_lms_ps_loaded_models(self):
+        loaded = set()
+        try:
+            res = self._run_lms_cmd(["ps"], timeout=5)
+            if not res:
+                return loaded
+            out = (res.stdout or "") + "\n" + (res.stderr or "")
+            out_low = out.lower()
+            if "no loaded models" in out_low:
+                return set()
+            tokens_in_ps = set(re.findall(r"[a-z0-9_.\-/]+", out_low))
+            for m in self._available_models:
+                m_low = m.lower()
+                if m_low in tokens_in_ps or re.search(rf"(?<![a-z0-9_.\-/]){re.escape(m_low)}(?![a-z0-9_.\-/])", out_low):
+                    loaded.add(m)
+        except Exception:
+            pass
+        return loaded
+
+    def _verified_unload_single_model(self, target_model):
+        clean_target = strip_loaded_prefix(target_model)
+        if not clean_target or clean_target in ALL_MODEL_PLACEHOLDERS or clean_target not in self._loaded_vram_models:
+            return
+        for _ in range(2):
+            self._run_lms_cmd(["unload", clean_target], timeout=10)
+            if clean_target not in self._query_lms_ps_loaded_models():
+                break
+        self._loaded_vram_models.discard(clean_target)
+
+    def _verified_unload_all_vram(self, timeout_per_step=8):
+        if not self._loaded_vram_models:
+            return True
+        self._run_lms_cmd(["unload", "--all"], timeout=timeout_per_step)
+        remaining = self._query_lms_ps_loaded_models()
+        if remaining:
+            for m in list(remaining):
+                self._run_lms_cmd(["unload", m], timeout=timeout_per_step)
+            remaining = self._query_lms_ps_loaded_models()
+        self._loaded_vram_models = remaining
+        return len(remaining) == 0
+
+    def _ensure_model_loaded_in_vram(self, target_model, unload_others=True):
+        clean_target = strip_loaded_prefix(target_model)
+        if not clean_target or clean_target in ALL_MODEL_PLACEHOLDERS:
+            return False
+
+        currently_loaded = self._query_lms_ps_loaded_models()
+        self._loaded_vram_models = currently_loaded
+        if clean_target in currently_loaded:
+            self.sig.refreshModelLabels.emit()
+            return True
+
+        if unload_others and currently_loaded:
+            self._verified_unload_all_vram(timeout_per_step=8)
+
+        self._run_lms_cmd(["load", clean_target, "-y"], timeout=60)
+
+        for _ in range(10):
+            loaded_now = self._query_lms_ps_loaded_models()
+            if clean_target in loaded_now:
+                self._loaded_vram_models = loaded_now
+                self.sig.refreshModelLabels.emit()
+                return True
+            time.sleep(0.4)
+
+        self._loaded_vram_models.add(clean_target)
+        self.sig.refreshModelLabels.emit()
+        return True
+
+    def set_model(self, selected_label):
+        new_model = strip_loaded_prefix(selected_label)
+        old_model = strip_loaded_prefix(self.model_id)
+        self.model_id = new_model
+        self._model_switch_id += 1
+        switch_id = self._model_switch_id
+
+        if new_model not in ALL_MODEL_PLACEHOLDERS:
+            self._saved_config_model = new_model
+        self._save_config()
+        self._refresh_model_dropdown_labels()
+
+        should_unload_old = (
+            old_model and old_model != new_model
+            and old_model not in ALL_MODEL_PLACEHOLDERS
+            and old_model in self._loaded_vram_models
+        )
+
+        if should_unload_old:
+            def swap_vram():
+                self._abort_active_stream()
+                self.sig.statusAnimStart.emit(f"{self._tr('unloading')} {old_model}", "#eab308")
+                self._verified_unload_single_model(old_model)
+                if self._model_switch_id != switch_id:
+                    return
+                self.sig.refreshModelLabels.emit()
+                if new_model in ALL_MODEL_PLACEHOLDERS:
+                    self.sig.statusAnimStop.emit(self._tr("model_reset"), THEME["text_muted"], 0.0)
+                else:
+                    self.sig.statusAnimStop.emit(self._tr("model_ready"), "#22c55e", 0.0)
+                    if self.chk_auto.isChecked():
+                        QTimer.singleShot(0, self._force_trigger)
+            threading.Thread(target=swap_vram, daemon=True).start()
+        else:
+            if new_model in ALL_MODEL_PLACEHOLDERS:
+                self._stop_status_anim(self._tr("choose_model_bottom"), "#eab308", 0.0)
+            else:
+                self._stop_status_anim(self._tr("model_ready"), "#22c55e", 0.0)
+                if self.chk_auto.isChecked():
+                    self._force_trigger()
+
+    def fetch_models(self, silent=False, auto_start_server=True):
+        if not silent:
+            self._start_status_anim(self._tr("searching_lms"), "#3b82f6")
+
+        def task():
+            for host in (LM_HOST, "localhost"):
                 try:
-                    if HAS_PIL:
-                        pil_ico = Image.open(png_path).convert("RGBA")
-                        self._icon_img_64 = ImageTk.PhotoImage(pil_ico.resize((64, 64), Image.Resampling.LANCZOS))
-                        self._icon_img_32 = ImageTk.PhotoImage(pil_ico.resize((32, 32), Image.Resampling.LANCZOS))
-                        self.iconphoto(True, self._icon_img_64, self._icon_img_32)
+                    test_client = OpenAI(base_url=f"http://{host}:{LM_PORT}/v1", api_key="lm-studio", timeout=2.5)
+                    models = test_client.models.list()
+                    names = [m.id for m in models.data if "embed" not in m.id.lower()]
+                    cli_names = self._query_lms_ls_downloaded_models(known_api_names=names)
+                    if not names:
+                        names = cli_names
+                    self.client = OpenAI(base_url=f"http://{host}:{LM_PORT}/v1", api_key="lm-studio", timeout=30.0)
+                    if names:
+                        self._available_models = names
+                        self._loaded_vram_models = self._query_lms_ps_loaded_models()
+                        self.sig.modelsUpdated.emit(names, True, silent)
                     else:
-                        self._icon_img = tk.PhotoImage(file=png_path)
-                        self.iconphoto(True, self._icon_img)
+                        self._available_models = []
+                        self._loaded_vram_models = set()
+                        self.sig.modelsUpdated.emit([self._tr("no_models")], False, silent)
                     return
                 except Exception:
-                    pass
+                    continue
 
-        _force_set_icon()
-        # Перебиваем встроенный таймер CustomTkinter (200мс), который сбрасывает иконку на синий квадрат
-        self.after(250, _force_set_icon)
+            if auto_start_server and not silent:
+                self.sig.statusAnimPhase.emit(self._tr("starting_server"), "#eab308")
+                if self._boot_local_lm_studio_server():
+                    for host in (LM_HOST, "localhost"):
+                        try:
+                            test_client = OpenAI(base_url=f"http://{host}:{LM_PORT}/v1", api_key="lm-studio", timeout=3.0)
+                            models = test_client.models.list()
+                            names = [m.id for m in models.data if "embed" not in m.id.lower()]
+                            cli_names = self._query_lms_ls_downloaded_models(known_api_names=names)
+                            if not names:
+                                names = cli_names
+                            self.client = OpenAI(base_url=f"http://{host}:{LM_PORT}/v1", api_key="lm-studio", timeout=30.0)
+                            if names:
+                                self._available_models = names
+                                self._loaded_vram_models = self._query_lms_ps_loaded_models()
+                                self.sig.modelsUpdated.emit(names, True, silent)
+                                return
+                        except Exception:
+                            continue
 
-    def _build_ui(self):
-        self.grid_columnconfigure(0, weight=1, uniform="panel")
-        self.grid_columnconfigure(1, weight=0)
-        self.grid_columnconfigure(2, weight=1, uniform="panel")
-        self.grid_rowconfigure(1, weight=1)
+            self._loaded_vram_models = set()
+            self.sig.modelsUpdated.emit([self._tr("offline_model")], False, silent)
 
-        self.dd_src = SearchableDropdown(
-            self, self, self._get_localized_world_languages(), self._tr("auto_detect"),
-            command=self._on_src_lang_selected, aliases=LANG_MAP, prefer_upwards=False,
-            height=34, allow_custom=True, flag_provider=self._get_flag_photo_for_label
-        )
-        self.dd_src.grid(row=0, column=0, sticky="ew", padx=(12, 6), pady=(12, 6))
+        threading.Thread(target=task, daemon=True).start()
 
-        self.dd_tgt = SearchableDropdown(
-            self, self, self._get_localized_target_languages(), self._tr("select_lang"),
-            command=self._on_tgt_lang_selected, aliases=LANG_MAP, prefer_upwards=False,
-            height=34, allow_custom=True, flag_provider=self._get_flag_photo_for_label
-        )
-        self.dd_tgt.grid(row=0, column=2, sticky="ew", padx=(6, 12), pady=(12, 6))
+    def _update_models_ui(self, names, online, silent=False):
+        self._is_online = online
+        self._sync_server_button_visibility()
+        self._sync_vram_button_visibility()
+        if online:
+            self._available_models = list(names)
+            clean_cur = strip_loaded_prefix(self.model_id)
+            if clean_cur in names:
+                self.model_id = clean_cur
+            elif self._saved_config_model in names:
+                self.model_id = self._saved_config_model
+            else:
+                self.model_id = self._tr("select_model")
 
-        self.t_in = ctk.CTkTextbox(
-            self,
-            font=(UI_FONT, 15),
-            fg_color=THEME["bg_card_in"],
-            text_color=THEME["text_main"],
-            border_width=1,
-            border_color=THEME["border_subtle"],
-            corner_radius=10,
-            undo=True,
-            wrap="word"
-        )
-        self.t_in.grid(row=1, column=0, sticky="nsew", padx=(12, 6), pady=4)
-        self._configure_rich_text_tags(self.t_in._textbox, is_input=True)
+            self._refresh_model_dropdown_labels()
+            if self._is_valid_model_selected():
+                self._stop_status_anim(self._tr("lms_online"), "#22c55e", 0.0)
+            else:
+                self._stop_status_anim(self._tr("choose_model_bottom"), "#eab308", 0.0)
+        else:
+            self.dd_model.configure_values(names)
+            self.dd_model.set(names[0])
+            self.model_id = ""
+            if not silent:
+                self._stop_status_anim(self._tr("server_failed"), "#ef4444", 0.0)
 
-        self.mid_bar = ctk.CTkFrame(self, fg_color="transparent", width=44)
-        self.mid_bar.grid(row=1, column=1, sticky="ns", pady=4)
+    def load_selected_model_to_vram(self):
+        if self._is_loading_model or not self._is_online or not self._is_valid_model_selected():
+            return
+        target_model = strip_loaded_prefix(self.model_id)
+        if target_model in self._loaded_vram_models:
+            self._sync_vram_button_visibility()
+            return
 
-        self.btn_swap = ctk.CTkButton(
-            self.mid_bar, text="⇄" if not self.ctk_icons["swap"] else "", image=self.ctk_icons["swap"],
-            width=38, height=34, corner_radius=8,
-            fg_color=THEME["bg_btn"], hover_color=THEME["bg_btn_hover"],
-            state="disabled", command=self.swap_languages
-        )
-        self.btn_swap.pack(pady=(0, 6))
+        self._is_loading_model = True
+        self._set_btn_enabled_with_cursor(self.btn_load_model, False)
+        self._refresh_button_icons()
+        self._start_status_anim(f"{self._tr('loading_vram')}: {target_model}", "#eab308")
 
-        self.btn_tts = ctk.CTkButton(
-            self.mid_bar, text="🔊" if not self.ctk_icons["tts_play"] else "", image=self.ctk_icons["tts_play"],
-            width=38, height=34, corner_radius=8,
-            fg_color=THEME["bg_btn"], hover_color=THEME["bg_btn_hover"],
-            command=self.toggle_tts
-        )
-        self.btn_tts.pack(pady=6)
+        def task():
+            try:
+                self._ensure_model_loaded_in_vram(target_model, unload_others=True)
+                self.sig.statusAnimStop.emit(self._tr("model_ready"), "#22c55e", 1.0)
+                if self.chk_auto.isChecked() and (self.t_in.toPlainText().strip() or self._attached_image_b64):
+                    QTimer.singleShot(0, self._force_trigger)
+            finally:
+                self._is_loading_model = False
+                QTimer.singleShot(0, self._on_load_model_btn_done)
 
-        self.btn_go = ctk.CTkButton(
-            self.mid_bar, text="❯" if not self.ctk_icons["play"] else "", image=self.ctk_icons["play"],
-            width=38, height=88, corner_radius=10,
-            fg_color=THEME["bg_accent"], hover_color=THEME["bg_accent_hover"],
-            command=self._force_trigger
-        )
-        self.btn_go.pack(pady=6, expand=True)
+        threading.Thread(target=task, daemon=True).start()
 
-        self.btn_stop = ctk.CTkButton(
-            self.mid_bar, text="⊘" if not self.ctk_icons["stop"] else "", image=self.ctk_icons["stop"],
-            width=38, height=34, corner_radius=8,
-            fg_color=THEME["bg_btn"], hover_color=THEME["bg_danger_hover"],
-            state="disabled", command=self.stop_translation
-        )
-        self.btn_stop.pack(pady=(6, 0))
+    def _on_load_model_btn_done(self):
+        self._set_btn_enabled_with_cursor(self.btn_load_model, True)
+        self._refresh_button_icons()
 
-        self.out_container = ctk.CTkFrame(self, fg_color="transparent")
-        self.out_container.grid(row=1, column=2, sticky="nsew", padx=(6, 12), pady=4)
-        self.out_container.grid_rowconfigure(0, weight=1)
-        self.out_container.grid_columnconfigure(0, weight=1)
+    def unload_vram(self):
+        if not self._loaded_vram_models:
+            self._sync_vram_button_visibility()
+            self._stop_status_anim(self._tr("vram_already_empty"), "#22c55e", 0.0)
+            return
 
-        self.t_out = ctk.CTkTextbox(
-            self.out_container,
-            font=(UI_FONT, 15),
-            fg_color=THEME["bg_card_out"],
-            text_color=THEME["text_main"],
-            border_width=1,
-            border_color=THEME["border_subtle"],
-            corner_radius=10,
-            wrap="word"
-        )
-        self.t_out.grid(row=0, column=0, sticky="nsew")
-        self.t_out._textbox.configure(
-            insertwidth=0,
-            selectbackground=THEME["bg_accent"],
-            selectforeground="#ffffff",
-            inactiveselectbackground="#1e3a8a",
-            exportselection=True
-        )
-        self._configure_rich_text_tags(self.t_out._textbox, is_input=False)
+        def task():
+            self._abort_active_stream()
+            self.sig.statusAnimStart.emit(self._tr("vram_check"), "#eab308")
+            all_clean = self._verified_unload_all_vram()
+            self.sig.refreshModelLabels.emit()
+            if all_clean:
+                self.sig.statusAnimStop.emit(self._tr("vram_cleaned_all"), "#22c55e", 0.0)
+            else:
+                self.sig.statusAnimStop.emit(self._tr("vram_cleaned"), "#eab308", 0.0)
 
-        self.btn_instant = ctk.CTkButton(
-            self.out_container, text=self._tr("instant_btn"), height=30, width=148,
-            font=(UI_FONT, 12, "bold"), fg_color=THEME["bg_accent"], hover_color=THEME["bg_accent_hover"],
-            corner_radius=7, command=self.skip_typewriter_animation
-        )
-        self.btn_instant.place_forget()
+        threading.Thread(target=task, daemon=True).start()
 
-        self.progress_bar = ctk.CTkProgressBar(
-            self, height=4, corner_radius=2,
-            progress_color="#3b82f6", fg_color="#181c26"
-        )
-        self.progress_bar.grid(row=2, column=0, columnspan=3, sticky="ew", padx=12, pady=(4, 2))
-        self.progress_bar.set(0.0)
+    def stop_translation(self):
+        self._abort_active_stream()
+        self._reset_gen_buttons()
+        self._stop_status_anim(self._tr("stopped"), "#eab308", 0.0)
 
-        self.bot_left = ctk.CTkFrame(self, fg_color="transparent", height=32)
-        self.bot_left.grid(row=3, column=0, sticky="ew", padx=(12, 6), pady=(4, 12))
-        self.bot_left.grid_columnconfigure(1, weight=1)
+    def _reset_gen_buttons(self):
+        self._set_btn_enabled_with_cursor(self.btn_go, True)
+        self.btn_stop.hide()
+        self._refresh_button_icons()
 
-        self.chk_auto = ctk.CTkCheckBox(
-            self.bot_left, text=self._tr("auto_trans_chk"), font=(UI_FONT, 12),
-            checkbox_width=18, checkbox_height=18, corner_radius=5,
-            command=self._save_config
-        )
-        self.chk_auto.grid(row=0, column=0, padx=(2, 10))
-        self.chk_auto.select()
-
-        self.lbl_status = ctk.CTkLabel(
-            self.bot_left, text=self._tr("connecting"), font=(UI_FONT, 12, "bold"),
-            text_color=THEME["text_muted"], anchor="e", height=30
-        )
-        self.lbl_status.grid(row=0, column=1, sticky="ew", padx=(4, 2))
-        self.bot_left.bind("<Configure>", lambda e: self._refresh_status_label_ellipsis(), add="+")
-        if hasattr(self.lbl_status, "_label"):
-            HoverTooltip(self.lbl_status._label, self._get_status_tooltip_if_truncated, delay_ms=400)
-
-        self.bot_right = ctk.CTkFrame(self, fg_color="transparent", height=32)
-        self.bot_right.grid(row=3, column=2, sticky="ew", padx=(6, 12), pady=(4, 12))
-        self.bot_right.grid_columnconfigure(0, weight=1)
-
-        self.dd_model = SearchableDropdown(
-            self.bot_right, self, [self._tr("select_model")], self._tr("select_model"),
-            command=self.set_model, prefer_upwards=True, height=30, allow_custom=False, font_size=12, flag_provider=None
-        )
-        self.dd_model.grid(row=0, column=0, sticky="ew", padx=(0, 4))
-
-        self.btn_refresh = ctk.CTkButton(
-            self.bot_right, text="🔄" if not self.ctk_icons["refresh"] else "", image=self.ctk_icons["refresh"],
-            width=30, height=30, corner_radius=7,
-            fg_color=THEME["bg_btn"], hover_color=THEME["bg_btn_hover"],
-            command=lambda: self.fetch_models(auto_start_server=False)
-        )
-        self.btn_refresh.grid(row=0, column=1, padx=2)
-
-        self.btn_server = ctk.CTkButton(
-            self.bot_right, text=self._tr("server_btn"), image=self.ctk_icons["server"], compound="left",
-            width=64, height=30, corner_radius=7, font=(UI_FONT, 12, "bold"),
-            fg_color=THEME["bg_server"], hover_color=THEME["bg_server_hover"],
-            border_width=1, border_color=THEME["border_subtle"],
-            command=self.start_lm_studio_server_manual
-        )
-        self.btn_server.grid(row=0, column=2, padx=2)
-
-        self.btn_load_model = ctk.CTkButton(
-            self.bot_right, text="⬇" if not self.ctk_icons.get("model_load") else "", image=self.ctk_icons.get("model_load"),
-            width=30, height=30, corner_radius=7,
-            fg_color=THEME["bg_btn"], hover_color=THEME["bg_accent"],
-            command=self.load_selected_model_to_vram
-        )
-        self.btn_load_model.grid(row=0, column=3, padx=2)
-
-        self.btn_vram = ctk.CTkButton(
-            self.bot_right, text="VRAM", image=self.ctk_icons.get("vram_clean"), compound="left",
-            width=62, height=30, corner_radius=7, font=(UI_FONT, 12, "bold"),
-            fg_color=THEME["bg_danger"], hover_color=THEME["bg_danger_hover"],
-            command=self.unload_vram
-        )
-        self.btn_vram.grid(row=0, column=3, padx=2)
-
-        self.btn_settings = ctk.CTkButton(
-            self.bot_right, text="⚙" if not self.ctk_icons["settings"] else "", image=self.ctk_icons["settings"],
-            width=30, height=30, corner_radius=7,
-            fg_color=THEME["bg_btn"], hover_color=THEME["bg_btn_hover"],
-            command=self._toggle_settings_popup
-        )
-        self.btn_settings.grid(row=0, column=4, padx=(2, 0))
-        # Всплывающие подсказки при долгом наведении
-        HoverTooltip(self.btn_swap, lambda: self._tr("tip_swap"), delay_ms=500)
-        HoverTooltip(self.btn_tts, lambda: self._tr("tip_tts"), delay_ms=500)
-        HoverTooltip(self.btn_go, lambda: self._tr("tip_go"), delay_ms=500)
-        HoverTooltip(self.btn_stop, lambda: self._tr("tip_stop"), delay_ms=500)
-        HoverTooltip(self.chk_auto, lambda: self._tr("tip_auto_chk"), delay_ms=500)
-        HoverTooltip(self.btn_refresh, lambda: self._tr("tip_refresh"), delay_ms=500)
-        HoverTooltip(self.btn_server, lambda: self._tr("tip_server"), delay_ms=500)
-        HoverTooltip(self.btn_load_model, lambda: self._tr("tip_load_model"), delay_ms=500)
-        HoverTooltip(self.btn_vram, lambda: self._tr("tip_vram"), delay_ms=500)
-        HoverTooltip(self.btn_settings, lambda: self._tr("tip_settings"), delay_ms=500)
-
+    # --- TTS ---
     @staticmethod
     def _split_tts_sentences(text, max_len=180):
         raw_parts = re.split(r"(?<=[.!?;\n])\s+", text)
@@ -2628,27 +4205,6 @@ class LLMTranslateApp(ctk.CTk):
             if part:
                 chunks.append(part)
         return chunks if chunks else [text[:max_len]]
-
-    def _mci_send_main_thread(self, cmd):
-        """Выполняет команду MCI в главном потоке Tkinter (где есть Windows Message Loop)."""
-        if not IS_WIN:
-            return ""
-        res_holder = [""]
-        done_ev = threading.Event()
-
-        def _run():
-            try:
-                buf = ctypes.create_unicode_buffer(256)
-                rc = ctypes.windll.winmm.mciSendStringW(cmd, buf, 256, 0)
-                res_holder[0] = f"ERR:{rc}" if rc != 0 else buf.value
-            except Exception as e:
-                res_holder[0] = f"ERR:{e}"
-            finally:
-                done_ev.set()
-
-        self.after(0, _run)
-        done_ev.wait(timeout=1.5)
-        return res_holder[0]
 
     @staticmethod
     def _fetch_tts_mp3_bytes(chunk, tl_code):
@@ -2687,12 +4243,10 @@ class LLMTranslateApp(ctk.CTk):
 
         self._tts_stop_event.clear()
         self._is_speaking = True
-        self.btn_tts.configure(
-            text="⏹" if not self.ctk_icons["tts_stop"] else "",
-            image=self.ctk_icons["tts_stop"],
-            fg_color=THEME["bg_accent"],
-            hover_color=THEME["bg_accent_hover"]
-        )
+        self.btn_tts.setObjectName("AccentBtn")
+        self.btn_tts.style().unpolish(self.btn_tts)
+        self.btn_tts.style().polish(self.btn_tts)
+        self._refresh_button_icons()
         self._stop_status_anim(self._tr("tts_speaking"), "#3b82f6", 1.0)
 
         def tts_worker():
@@ -2703,7 +4257,6 @@ class LLMTranslateApp(ctk.CTk):
                 audio_buffers = [None] * len(sentences)
                 ready_events = [threading.Event() for _ in sentences]
 
-                # Параллельная предзагрузка всех фраз в RAM, чтобы не было пауз между предложениями
                 def prefetch_idx(i, text_chunk):
                     try:
                         if not self._tts_stop_event.is_set():
@@ -2728,37 +4281,30 @@ class LLMTranslateApp(ctk.CTk):
                         f.write(audio_bytes)
 
                     if IS_WIN:
-                        self._mci_send_main_thread("close llm_tts")
+                        ctypes.windll.winmm.mciSendStringW("close llm_tts", None, 0, 0)
                         short_p = get_win_short_path(tmp_mp3)
-                        open_res = self._mci_send_main_thread(f'open "{short_p}" type mpegvideo alias llm_tts')
-                        if open_res.startswith("ERR:"):
+                        buf = ctypes.create_unicode_buffer(256)
+                        rc = ctypes.windll.winmm.mciSendStringW(f'open "{short_p}" type mpegvideo alias llm_tts', buf, 256, 0)
+                        if rc != 0:
                             break
-
-                        self._mci_send_main_thread("setaudio llm_tts volume to 1000")
-                        len_str = self._mci_send_main_thread("status llm_tts length")
-                        total_ms = int(len_str) if len_str.isdigit() else 0
-
-                        play_res = self._mci_send_main_thread("play llm_tts from 0")
-                        if play_res.startswith("ERR:"):
-                            self._mci_send_main_thread("close llm_tts")
+                        ctypes.windll.winmm.mciSendStringW("setaudio llm_tts volume to 1000", None, 0, 0)
+                        ctypes.windll.winmm.mciSendStringW("status llm_tts length", buf, 256, 0)
+                        total_ms = int(buf.value) if buf.value.isdigit() else 0
+                        if ctypes.windll.winmm.mciSendStringW("play llm_tts from 0", None, 0, 0) != 0:
+                            ctypes.windll.winmm.mciSendStringW("close llm_tts", None, 0, 0)
                             break
 
                         played_online = True
                         start_t = time.monotonic()
                         max_wait = (total_ms / 1000.0 + 0.4) if total_ms > 0 else 15.0
-
                         while not self._tts_stop_event.is_set():
                             if time.monotonic() - start_t > max_wait:
                                 break
-                            pos_str = self._mci_send_main_thread("status llm_tts position")
-                            if total_ms > 0 and pos_str.isdigit() and int(pos_str) >= total_ms - 35:
-                                break
-                            mode_str = self._mci_send_main_thread("status llm_tts mode").lower()
-                            if mode_str in ("stopped", "not ready", "") and (time.monotonic() - start_t) > 0.2:
+                            ctypes.windll.winmm.mciSendStringW("status llm_tts position", buf, 256, 0)
+                            if total_ms > 0 and buf.value.isdigit() and int(buf.value) >= total_ms - 35:
                                 break
                             time.sleep(0.03)
-
-                        self._mci_send_main_thread("close llm_tts")
+                        ctypes.windll.winmm.mciSendStringW("close llm_tts", None, 0, 0)
                     elif IS_MAC:
                         played_online = True
                         proc = subprocess.Popen(["afplay", tmp_mp3], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -2784,7 +4330,10 @@ class LLMTranslateApp(ctk.CTk):
                 pass
             finally:
                 if IS_WIN:
-                    self._mci_send_main_thread("close llm_tts")
+                    try:
+                        ctypes.windll.winmm.mciSendStringW("close llm_tts", None, 0, 0)
+                    except Exception:
+                        pass
                 if os.path.exists(tmp_mp3):
                     try:
                         os.remove(tmp_mp3)
@@ -2835,11 +4384,7 @@ class LLMTranslateApp(ctk.CTk):
                         proc.wait()
                     else:
                         lang_short = bcp47.split("-")[0]
-                        for cmd in (
-                            ["spd-say", "-w", "-l", lang_short, clean_speech],
-                            ["espeak-ng", "-v", lang_short, clean_speech],
-                            ["espeak", "-v", lang_short, clean_speech],
-                        ):
+                        for cmd in (["spd-say", "-w", "-l", lang_short, clean_speech], ["espeak-ng", "-v", lang_short, clean_speech]):
                             if shutil.which(cmd[0]):
                                 proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                                 with self._tts_lock:
@@ -2853,7 +4398,7 @@ class LLMTranslateApp(ctk.CTk):
                         if self._tts_proc is proc:
                             self._tts_proc = None
 
-            self.after(0, self._reset_tts_ui_after_finish)
+            self.sig.ttsFinished.emit()
 
         threading.Thread(target=tts_worker, daemon=True).start()
 
@@ -2861,12 +4406,10 @@ class LLMTranslateApp(ctk.CTk):
         if not self._is_speaking:
             return
         self._is_speaking = False
-        self.btn_tts.configure(
-            text="🔊" if not self.ctk_icons["tts_play"] else "",
-            image=self.ctk_icons["tts_play"],
-            fg_color=THEME["bg_btn"],
-            hover_color=THEME["bg_btn_hover"]
-        )
+        self.btn_tts.setObjectName("")
+        self.btn_tts.style().unpolish(self.btn_tts)
+        self.btn_tts.style().polish(self.btn_tts)
+        self._refresh_button_icons()
         if not self._anim_running:
             if self._tw_final_status_msg:
                 self._stop_status_anim(self._tw_final_status_msg, self._tw_final_status_color, 1.0)
@@ -2888,1337 +4431,16 @@ class LLMTranslateApp(ctk.CTk):
                 proc.kill()
             except Exception:
                 pass
-        tmp_mp3 = os.path.join(tempfile.gettempdir(), f"llm_tts_{os.getpid()}.mp3")
-        if os.path.exists(tmp_mp3):
-            try:
-                os.remove(tmp_mp3)
-            except Exception:
-                pass
         if self._is_speaking:
             self._is_speaking = False
-            self.btn_tts.configure(
-                text="🔊" if not self.ctk_icons["tts_play"] else "",
-                image=self.ctk_icons["tts_play"],
-                fg_color=THEME["bg_btn"],
-                hover_color=THEME["bg_btn_hover"]
-            )
+            self.btn_tts.setObjectName("")
+            self.btn_tts.style().unpolish(self.btn_tts)
+            self.btn_tts.style().polish(self.btn_tts)
+            self._refresh_button_icons()
             if show_status and not self._anim_running:
                 self._stop_status_anim(self._tr("tts_stopped"), "#eab308", 0.0)
 
-    def _get_status_tooltip_if_truncated(self):
-        try:
-            shown = self.lbl_status.cget("text")
-            if shown and shown.endswith("...") and shown != self._full_status_text:
-                return self._full_status_text
-        except Exception:
-            pass
-        return ""
-
-    def _refresh_status_label_ellipsis(self):
-        try:
-            tk_lbl = getattr(self.lbl_status, "_label", self.lbl_status)
-            phys_w = self.lbl_status.winfo_width()
-            if phys_w <= 36:
-                bot_w = self.bot_left.winfo_width()
-                lbl_x = self.lbl_status.winfo_x()
-                if bot_w > 120 and lbl_x > 0:
-                    phys_w = bot_w - lbl_x - 6
-
-            if phys_w <= 36:
-                self.lbl_status.configure(text=self._full_status_text, text_color=self._full_status_color)
-                return
-
-            avail_phys_px = max(50, phys_w - 8)
-            f_obj = get_tkfont_for_widget(tk_lbl, fallback_family=UI_FONT, fallback_size=-12, fallback_weight="bold")
-            short_txt = truncate_text_with_font(self._full_status_text, avail_phys_px, tk_font_obj=f_obj)
-            self.lbl_status.configure(text=short_txt, text_color=self._full_status_color)
-        except Exception:
-            try:
-                self.lbl_status.configure(text=self._full_status_text, text_color=self._full_status_color)
-            except Exception:
-                pass
-
-    def _set_status_label(self, full_text, color):
-        self._full_status_text = full_text
-        self._full_status_color = color
-        self._refresh_status_label_ellipsis()
-
-    def _configure_rich_text_tags(self, tb, is_input=False):
-        tb.tag_config("warn_banner", font=(UI_FONT, 13, "bold"), foreground="#f59e0b")
-        tb.tag_config("main_trans", font=(UI_FONT, 15), foreground="#ffffff")
-        tb.tag_config("dict_title", font=(UI_FONT, 13, "italic"), foreground="#8a8a8a")
-        tb.tag_config("pos_header", font=(UI_FONT, 14, "bold"), foreground="#3b82f6")
-        tb.tag_config("idiom_header", font=(UI_FONT, 14, "bold"), foreground="#a855f7")
-        tb.tag_config("native_header", font=(UI_FONT, 14, "bold"), foreground="#10b981")
-        tb.tag_config("dict_pending_dots", font=(UI_FONT, 16, "bold"), foreground="#3b82f6")
-        tb.tag_config("dict_body", font=(UI_FONT, 13), foreground="#d4d4d4")
-
-        tb.tag_config("md_bold", font=(UI_FONT, 15, "bold"), foreground="#ffffff")
-        tb.tag_config("md_italic", font=(UI_FONT, 15, "italic"), foreground="#f3f4f6")
-        tb.tag_config("md_bold_italic", font=(UI_FONT, 15, "bold italic"), foreground="#ffffff")
-        tb.tag_config("md_code", font=(MONO_FONT, 14, "bold"), background="#242936", foreground="#93c5fd")
-        tb.tag_config("md_codeblock", font=(MONO_FONT, 14), background="#1c212c", foreground="#60a5fa")
-        tb.tag_config("md_strike", font=(UI_FONT, 15, "overstrike"), foreground="#9ca3af")
-        tb.tag_config("md_underline", font=(UI_FONT, 15, "underline"), foreground="#ffffff")
-        tb.tag_config("md_header", font=(UI_FONT, 17, "bold"), foreground="#60a5fa")
-        tb.tag_config("md_quote", font=(UI_FONT, 15, "italic"), foreground="#9ca3af")
-
-        if is_input:
-            tb.tag_config("md_syntax_hidden", elide=True)
-            tb.tag_config("md_syntax_active", foreground="#52525b")
-
-    def _apply_live_input_markdown(self):
-        tb = self.t_in._textbox
-        raw = tb.get("1.0", "end-1c")
-
-        for tag in (
-            "md_bold", "md_italic", "md_bold_italic", "md_code", "md_codeblock",
-            "md_strike", "md_underline", "md_header", "md_quote",
-            "md_syntax_hidden", "md_syntax_active"
-        ):
-            tb.tag_remove(tag, "1.0", "end")
-
-        if not raw:
-            return
-
-        try:
-            ins_line, ins_col = map(int, tb.index("insert").split("."))
-            lines_before = raw.split("\n")[:ins_line - 1]
-            cursor_offset = sum(len(l) + 1 for l in lines_before) + ins_col
-        except Exception:
-            cursor_offset = -1
-
-        offset = 0
-        for line in raw.split("\n"):
-            line_len = len(line)
-            h_m = re.match(r"^(#{1,3}\s+)(.+)$", line)
-            if h_m:
-                p_len = len(h_m.group(1))
-                s_idx = f"1.0+{offset}c"
-                m_idx = f"1.0+{offset + p_len}c"
-                e_idx = f"1.0+{offset + line_len}c"
-                tb.tag_add("md_header", m_idx, e_idx)
-                syn_tag = "md_syntax_active" if (offset <= cursor_offset <= offset + line_len) else "md_syntax_hidden"
-                tb.tag_add(syn_tag, s_idx, m_idx)
-            else:
-                q_m = re.match(r"^(>\s+)(.+)$", line)
-                if q_m:
-                    p_len = len(q_m.group(1))
-                    s_idx = f"1.0+{offset}c"
-                    m_idx = f"1.0+{offset + p_len}c"
-                    e_idx = f"1.0+{offset + line_len}c"
-                    tb.tag_add("md_quote", m_idx, e_idx)
-                    syn_tag = "md_syntax_active" if (offset <= cursor_offset <= offset + line_len) else "md_syntax_hidden"
-                    tb.tag_add(syn_tag, s_idx, m_idx)
-            offset += line_len + 1
-
-        for m in RE_MD_TOKEN.finditer(raw):
-            st, en = m.span()
-            token = m.group(0)
-            cursor_inside = (st <= cursor_offset <= en)
-            syn_tag = "md_syntax_active" if cursor_inside else "md_syntax_hidden"
-
-            if token.startswith("```") and token.endswith("```") and len(token) > 6:
-                d_len, style_tag = 3, "md_codeblock"
-            elif token.startswith("`") and token.endswith("`") and len(token) > 2:
-                d_len, style_tag = 1, "md_code"
-            elif token.startswith("***") and token.endswith("***") and len(token) > 6:
-                d_len, style_tag = 3, "md_bold_italic"
-            elif (token.startswith("**") and token.endswith("**")) or (token.startswith("__") and token.endswith("__")):
-                d_len, style_tag = 2, "md_bold"
-            elif (token.startswith("*") and token.endswith("*")) or (token.startswith("_") and token.endswith("_")):
-                d_len, style_tag = 1, "md_italic"
-            elif token.startswith("~~") and token.endswith("~~") and len(token) > 4:
-                d_len, style_tag = 2, "md_strike"
-            elif token.startswith("++") and token.endswith("++") and len(token) > 4:
-                d_len, style_tag = 2, "md_underline"
-            else:
-                continue
-
-            tb.tag_add(syn_tag, f"1.0+{st}c", f"1.0+{st + d_len}c")
-            tb.tag_add(style_tag, f"1.0+{st + d_len}c", f"1.0+{en - d_len}c")
-            tb.tag_add(syn_tag, f"1.0+{en - d_len}c", f"1.0+{en}c")
-
-    def _insert_markdown_styled_text(self, tb, text, default_tag="main_trans"):
-        lines = text.split("\n")
-        for l_idx, line in enumerate(lines):
-            if l_idx > 0:
-                tb.insert("end", "\n", default_tag)
-
-            base_tag = default_tag
-            work_line = line
-            h_m = re.match(r"^#{1,3}\s+(.+)$", work_line)
-            if h_m:
-                base_tag = "md_header"
-                work_line = h_m.group(1)
-            else:
-                q_m = re.match(r"^>\s+(.+)$", work_line)
-                if q_m:
-                    base_tag = "md_quote"
-                    work_line = "▎ " + q_m.group(1)
-
-            last_idx = 0
-            for m in RE_MD_TOKEN.finditer(work_line):
-                st, en = m.span()
-                if st > last_idx:
-                    tb.insert("end", work_line[last_idx:st], base_tag)
-
-                token = m.group(0)
-                if token.startswith("```") and token.endswith("```") and len(token) > 6:
-                    tb.insert("end", token[3:-3], "md_codeblock")
-                elif token.startswith("`") and token.endswith("`") and len(token) > 2:
-                    tb.insert("end", token[1:-1], "md_code")
-                elif token.startswith("***") and token.endswith("***") and len(token) > 6:
-                    tb.insert("end", token[3:-3], "md_bold_italic")
-                elif (token.startswith("**") and token.endswith("**")) or (token.startswith("__") and token.endswith("__")):
-                    tb.insert("end", token[2:-2], "md_bold")
-                elif (token.startswith("*") and token.endswith("*")) or (token.startswith("_") and token.endswith("_")):
-                    tb.insert("end", token[1:-1], "md_italic")
-                elif token.startswith("~~") and token.endswith("~~") and len(token) > 4:
-                    tb.insert("end", token[2:-2], "md_strike")
-                elif token.startswith("++") and token.endswith("++") and len(token) > 4:
-                    tb.insert("end", token[2:-2], "md_underline")
-                else:
-                    tb.insert("end", token, base_tag)
-
-                last_idx = en
-
-            if last_idx < len(work_line):
-                tb.insert("end", work_line[last_idx:], base_tag)
-
-    def _format_model_display(self, model_name):
-        clean = strip_loaded_prefix(model_name)
-        if clean in ALL_MODEL_PLACEHOLDERS or not clean:
-            return clean
-        return f"{LOADED_PREFIX}{clean}" if clean in self._loaded_vram_models else clean
-
-    def _refresh_model_dropdown_labels(self):
-        self._sync_vram_button_visibility()
-        if not self._is_online or not self._available_models:
-            return
-        placeholder = self._tr("select_model")
-        formatted_list = [placeholder] + [self._format_model_display(m) for m in self._available_models]
-        self.dd_model.configure_values(formatted_list)
-        if self._is_valid_model_selected():
-            self.dd_model.set(self._format_model_display(self.model_id))
-        else:
-            self.dd_model.set(placeholder)
-
-    def _query_lms_ps_loaded_models(self):
-        loaded = set()
-        try:
-            res = subprocess.run(
-                [LMS_BIN, "ps"],
-                shell=False,
-                timeout=5,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="ignore",
-                creationflags=subprocess.CREATE_NO_WINDOW if IS_WIN else 0
-            )
-            out = (res.stdout or "") + "\n" + (res.stderr or "")
-            out_low = out.lower()
-            if "no loaded models" in out_low:
-                return set()
-            tokens_in_ps = set(re.findall(r"[a-z0-9_.\-/]+", out_low))
-            for m in self._available_models:
-                m_low = m.lower()
-                if m_low in tokens_in_ps or re.search(rf"(?<![a-z0-9_.\-/]){re.escape(m_low)}(?![a-z0-9_.\-/])", out_low):
-                    loaded.add(m)
-        except Exception:
-            pass
-        return loaded
-
-    def _verified_unload_single_model(self, target_model):
-        clean_target = strip_loaded_prefix(target_model)
-        if not clean_target or clean_target in ALL_MODEL_PLACEHOLDERS:
-            return
-        if clean_target not in self._loaded_vram_models:
-            return
-        for _ in range(2):
-            self._run_lms_cmd(["unload", clean_target], timeout=10)
-            currently_loaded = self._query_lms_ps_loaded_models()
-            if clean_target not in currently_loaded:
-                break
-        self._loaded_vram_models.discard(clean_target)
-
-    def _verified_unload_all_vram(self, timeout_per_step=8):
-        if not self._loaded_vram_models:
-            return True
-        self._run_lms_cmd(["unload", "--all"], timeout=timeout_per_step)
-        remaining = self._query_lms_ps_loaded_models()
-        if remaining:
-            for m in list(remaining):
-                self._run_lms_cmd(["unload", m], timeout=timeout_per_step)
-            remaining = self._query_lms_ps_loaded_models()
-        self._loaded_vram_models = remaining
-        return len(remaining) == 0
-
-    def _toggle_pin(self):
-        if hasattr(self, "sw_pin") and self.sw_pin.winfo_exists():
-            self.pin_window = bool(self.sw_pin.get())
-        else:
-            self.pin_window = not self.pin_window
-        self.attributes("-topmost", self.pin_window)
-        self._save_config()
-
-    def _on_src_lang_selected(self, val):
-        canon = self._lang_to_canonical(val)
-        if canon == "Auto Detect":
-            self.is_auto_detect = True
-            self.detected_src_lang = None
-            self.dd_src.set(self._format_auto_detect_display(None))
-        else:
-            self.is_auto_detect = False
-            self.detected_src_lang = None
-            self.dd_src.set(self._lang_to_display(canon))
-        self._update_swap_button_state()
-        self._save_config()
-        if self.chk_auto.get():
-            self._force_trigger()
-
-    def _on_tgt_lang_selected(self, val):
-        if val not in ALL_LANG_PLACEHOLDERS:
-            canon = self._lang_to_canonical(val)
-            if canon == "Auto Detect":
-                self.dd_tgt.set(self._tr("select_lang"))
-            else:
-                self.dd_tgt.set(self._lang_to_display(canon))
-        self._update_swap_button_state()
-        self._save_config()
-        if self.chk_auto.get():
-            self._force_trigger()
-
-    def _get_effective_src_mode(self):
-        return "Auto Detect" if self.is_auto_detect else self._lang_to_canonical(self.dd_src.get())
-
-    def _get_effective_tgt_lang(self):
-        raw = self.dd_tgt.get()
-        if raw in ALL_LANG_PLACEHOLDERS or not raw:
-            return ""
-        return self._lang_to_canonical(raw)
-
-    def _is_valid_model_selected(self):
-        clean = strip_loaded_prefix(self.model_id)
-        return bool(clean) and clean not in ALL_MODEL_PLACEHOLDERS
-
-    def _update_swap_button_state(self):
-        tgt_canon = self._get_effective_tgt_lang()
-        if not tgt_canon or tgt_canon == "Auto Detect":
-            self.btn_swap.configure(state="disabled")
-            return
-
-        if self.is_auto_detect:
-            can_swap = bool(self.detected_src_lang) and (self.detected_src_lang != tgt_canon)
-        else:
-            src_canon = self._get_effective_src_mode()
-            can_swap = bool(src_canon) and (src_canon != "Auto Detect") and (src_canon != tgt_canon)
-
-        self.btn_swap.configure(state="normal" if can_swap else "disabled")
-
-    def _toggle_smart_search(self):
-        if hasattr(self, "sw_smart") and self.sw_smart.winfo_exists():
-            self.use_smart_search = bool(self.sw_smart.get())
-        else:
-            self.use_smart_search = not self.use_smart_search
-        self._save_config()
-
-    def _start_status_anim(self, phase_text, color="#eab308", bar_color="#eab308"):
-        self._anim_phase_text = phase_text
-        self._anim_color = color
-        self._anim_start_ts = time.monotonic()
-        self.progress_bar.configure(progress_color=bar_color)
-        if not self._anim_running:
-            self._anim_running = True
-            self._tick_status_anim()
-
-    def _update_status_anim_phase(self, phase_text, color="#3b82f6", bar_color="#3b82f6"):
-        self._anim_phase_text = phase_text
-        self._anim_color = color
-        self.progress_bar.configure(progress_color=bar_color)
-
-    def _stop_status_anim(self, final_text, color="#22c55e", bar_fill=1.0):
-        self._anim_running = False
-        self._set_status_label(final_text, color)
-        self.progress_bar.configure(progress_color=color if bar_fill > 0 else "#181c26")
-        self.progress_bar.set(bar_fill)
-
-    def _tick_status_anim(self):
-        if not self._anim_running:
-            return
-        frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
-        spinner = frames[self._anim_step % len(frames)]
-        elapsed = time.monotonic() - self._anim_start_ts
-
-        pos = (self._anim_step % 40) / 40.0
-        wave = pos * 2 if pos <= 0.5 else (1.0 - pos) * 2
-        self.progress_bar.set(0.15 + wave * 0.75)
-
-        unit = "s" if self.ui_lang == "en" else "с"
-        self._set_status_label(
-            f"{spinner} {self._anim_phase_text} ({elapsed:.1f}{unit})",
-            self._anim_color
-        )
-        self._anim_step += 1
-        self.after(80, self._tick_status_anim)
-
-    def _rebuild_context_menus(self):
-        inner_in = self.t_in._textbox
-        inner_out = self.t_out._textbox
-
-        if not hasattr(self, "ctx_menu_in") or self.ctx_menu_in is None:
-            self.ctx_menu_in = tk.Menu(self, tearoff=0, bg="#181b24", fg="white", activebackground=THEME["bg_accent"], font=(UI_FONT, 10))
-        else:
-            self.ctx_menu_in.delete(0, "end")
-
-        self.ctx_menu_in.add_command(label=self._tr("ctx_paste_cur"), command=lambda: self._paste_into_textbox(replace_all=False))
-        self.ctx_menu_in.add_command(label=self._tr("ctx_paste_rep"), command=self.paste_to_input)
-        self.ctx_menu_in.add_separator()
-        self.ctx_menu_in.add_command(label=self._tr("ctx_copy"), command=lambda: self._copy_from_widget(inner_in))
-        self.ctx_menu_in.add_command(label=self._tr("ctx_cut"), command=self._cut_from_input)
-        self.ctx_menu_in.add_command(label=self._tr("ctx_sel_all"), command=lambda: self._select_all_widget(inner_in))
-        self.ctx_menu_in.add_separator()
-        self.ctx_menu_in.add_command(label=self._tr("ctx_bold"), command=lambda: self._wrap_input_selection("**", "**"))
-        self.ctx_menu_in.add_command(label=self._tr("ctx_italic"), command=lambda: self._wrap_input_selection("*", "*"))
-        self.ctx_menu_in.add_command(label=self._tr("ctx_code"), command=lambda: self._wrap_input_selection("`", "`"))
-        self.ctx_menu_in.add_command(label=self._tr("ctx_strike"), command=lambda: self._wrap_input_selection("~~", "~~"))
-        self.ctx_menu_in.add_separator()
-        self.ctx_menu_in.add_command(label=self._tr("ctx_clear"), command=self.clear_all)
-
-        if not hasattr(self, "ctx_menu_out") or self.ctx_menu_out is None:
-            self.ctx_menu_out = tk.Menu(self, tearoff=0, bg="#181b24", fg="white", activebackground=THEME["bg_accent"], font=(UI_FONT, 10))
-        else:
-            self.ctx_menu_out.delete(0, "end")
-
-        self.ctx_menu_out.add_command(label=self._tr("ctx_copy_sel"), command=lambda: self._copy_from_widget(inner_out, fallback_all=True))
-        self.ctx_menu_out.add_command(label=self._tr("ctx_copy_all"), command=self.copy_output)
-        self.ctx_menu_out.add_separator()
-        self.ctx_menu_out.add_command(label=self._tr("ctx_sel_all"), command=lambda: self._select_all_widget(inner_out))
-
-        if not hasattr(self, "ctx_menu_entry") or self.ctx_menu_entry is None:
-            self.ctx_menu_entry = tk.Menu(self, tearoff=0, bg="#181b24", fg="white", activebackground=THEME["bg_accent"], font=(UI_FONT, 10))
-        else:
-            self.ctx_menu_entry.delete(0, "end")
-
-        self.ctx_menu_entry.add_command(label=self._tr("ctx_paste_cur"), command=lambda: self._entry_paste(self._active_entry_for_menu))
-        self.ctx_menu_entry.add_command(label=self._tr("ctx_copy"), command=lambda: self._entry_copy(self._active_entry_for_menu))
-        self.ctx_menu_entry.add_command(label=self._tr("ctx_cut"), command=lambda: self._entry_cut(self._active_entry_for_menu))
-        self.ctx_menu_entry.add_separator()
-        self.ctx_menu_entry.add_command(label=self._tr("ctx_sel_all"), command=lambda: self._entry_select_all(self._active_entry_for_menu))
-
-    def _setup_bindings(self):
-        self.bind("<Button-1>", self._check_outside_click, add="+")
-        self.bind("<Configure>", self._on_window_configure, add="+")
-        self.bind("<Unmap>", self._on_window_unmap, add="+")
-        self.bind("<FocusOut>", self._on_app_focus_out, add="+")
-
-        self.bind_all("<Control-KeyPress>", self._global_ctrl_key_router)
-
-        inner_in = self.t_in._textbox
-        inner_in.bind("<FocusIn>", lambda e: self.t_in.configure(border_color=THEME["border_focus"]), add="+")
-        inner_in.bind("<FocusOut>", lambda e: self.t_in.configure(border_color=THEME["border_subtle"]), add="+")
-        inner_in.bind("<KeyPress>", self._mark_edited)
-        inner_in.bind("<KeyRelease>", self._on_input_key_release)
-        inner_in.bind("<ButtonRelease-1>", lambda e: self.after(10, self._apply_live_input_markdown))
-        inner_in.bind("<Control-Return>", lambda e: self._force_trigger())
-        inner_in.bind("<<Paste>>", self._on_native_paste_in)
-        inner_in.bind("<<Cut>>", self._on_native_cut_in)
-        inner_in.bind("<<Copy>>", lambda e: self._on_native_copy(inner_in, fallback_all=False))
-
-        inner_out = self.t_out._textbox
-        inner_out.bind("<Button-1>", lambda e: inner_out.focus_set(), add="+")
-        inner_out.bind("<ButtonRelease-1>", self._remember_output_selection, add="+")
-        inner_out.bind("<B1-Motion>", self._remember_output_selection, add="+")
-        inner_out.bind("<KeyPress>", self._guard_output_keypress)
-        inner_out.bind("<<Copy>>", lambda e: self._on_native_copy(inner_out, fallback_all=True))
-        inner_out.bind("<<Paste>>", lambda e: "break")
-        inner_out.bind("<<Cut>>", lambda e: "break")
-
-        self._active_entry_for_menu = None
-        self._rebuild_context_menus()
-
-        for w_in in (self.t_in, inner_in):
-            w_in.bind("<Button-3>", self._show_in_context_menu)
-            if IS_MAC:
-                w_in.bind("<Button-2>", self._show_in_context_menu)
-
-        for w_out in (self.t_out, inner_out):
-            w_out.bind("<Button-3>", self._show_out_context_menu)
-            if IS_MAC:
-                w_out.bind("<Button-2>", self._show_out_context_menu)
-
-        for dd in (self.dd_src, self.dd_tgt, self.dd_model):
-            tk_ent = dd.entry._entry
-            tk_ent.bind("<<Paste>>", lambda e, ent=tk_ent, d=dd: self._entry_paste(ent, d))
-            tk_ent.bind("<<Cut>>", lambda e, ent=tk_ent, d=dd: self._entry_cut(ent, d))
-            tk_ent.bind("<<Copy>>", lambda e, ent=tk_ent: self._entry_copy(ent))
-            tk_ent.bind("<Button-3>", lambda e, ent=tk_ent: self._popup_entry_menu(ent, e))
-
-    def _remember_output_selection(self, event=None):
-        tb = self.t_out._textbox
-        try:
-            sel = tb.get("sel.first", "sel.last")
-            self._last_selected_out_text = sel if sel else ""
-        except tk.TclError:
-            self._last_selected_out_text = ""
-
-    def _on_native_copy(self, tb, fallback_all=False):
-        self._copy_from_widget(tb, fallback_all=fallback_all)
-        return "break"
-
-    def _show_in_context_menu(self, event):
-        self._close_all_dropdowns()
-        self.t_in._textbox.focus_set()
-        try:
-            self.ctx_menu_in.tk_popup(event.x_root, event.y_root)
-        finally:
-            self.ctx_menu_in.grab_release()
-        return "break"
-
-    def _show_out_context_menu(self, event):
-        self._close_all_dropdowns()
-        try:
-            sel = self.t_out._textbox.get("sel.first", "sel.last")
-            if sel:
-                self._last_selected_out_text = sel
-        except tk.TclError:
-            pass
-        self.t_out._textbox.focus_set()
-        try:
-            self.ctx_menu_out.tk_popup(event.x_root, event.y_root)
-        finally:
-            self.ctx_menu_out.grab_release()
-        return "break"
-
-    def _popup_entry_menu(self, tk_ent, event):
-        self._active_entry_for_menu = tk_ent
-        tk_ent.focus_set()
-        try:
-            self.ctx_menu_entry.tk_popup(event.x_root, event.y_root)
-        finally:
-            self.ctx_menu_entry.grab_release()
-        return "break"
-
-    @staticmethod
-    def _match_hotkey_action(event):
-        kc = event.keycode
-        ks = (event.keysym or "").lower()
-        if IS_WIN:
-            is_copy = (kc == 67)
-            is_paste = (kc == 86)
-            is_cut = (kc == 88)
-            is_sel_all = (kc == 65)
-            is_undo = (kc == 90)
-            is_redo = (kc == 89)
-        else:
-            is_copy = (kc == 54)
-            is_paste = (kc == 55)
-            is_cut = (kc == 53)
-            is_sel_all = (kc == 38)
-            is_undo = (kc == 52)
-            is_redo = (kc == 29)
-
-        is_copy = is_copy or ks in ("c", "с", "cyrillic_es")
-        is_paste = is_paste or ks in ("v", "м", "cyrillic_em")
-        is_cut = is_cut or ks in ("x", "ч", "cyrillic_che")
-        is_sel_all = is_sel_all or ks in ("a", "ф", "cyrillic_ef")
-        is_undo = is_undo or ks in ("z", "я", "cyrillic_ya")
-        is_redo = is_redo or ks in ("y", "н", "cyrillic_en")
-        return is_copy, is_paste, is_cut, is_sel_all, is_undo, is_redo
-
-    def _guard_output_keypress(self, event):
-        if event.keysym in ("Left", "Right", "Up", "Down", "Home", "End", "Prior", "Next", "Shift_L", "Shift_R", "Control_L", "Control_R"):
-            return None
-        if event.state & 0x4:
-            is_copy, _, _, is_sel_all, _, _ = self._match_hotkey_action(event)
-            if is_copy:
-                self._copy_from_widget(self.t_out._textbox, fallback_all=True)
-                return "break"
-            if is_sel_all:
-                self._select_all_widget(self.t_out._textbox)
-                return "break"
-        return "break"
-
-    def _global_ctrl_key_router(self, event):
-        is_copy, is_paste, is_cut, is_sel_all, is_undo, is_redo = self._match_hotkey_action(event)
-        if not (is_copy or is_paste or is_cut or is_sel_all or is_undo or is_redo):
-            return None
-
-        focused = self.focus_get()
-        if focused is None:
-            return None
-
-        inner_in = self.t_in._textbox
-        inner_out = self.t_out._textbox
-
-        if focused is inner_in or focused is self.t_in:
-            if is_paste:
-                self._paste_into_textbox(replace_all=False)
-                return "break"
-            elif is_copy:
-                self._copy_from_widget(inner_in)
-                return "break"
-            elif is_cut:
-                self._cut_from_input()
-                return "break"
-            elif is_sel_all:
-                self._select_all_widget(inner_in)
-                return "break"
-            elif is_undo:
-                try:
-                    inner_in.edit_undo()
-                    self._mark_edited()
-                    self.after(10, self._apply_live_input_markdown)
-                except Exception:
-                    pass
-                return "break"
-            elif is_redo:
-                try:
-                    inner_in.edit_redo()
-                    self._mark_edited()
-                    self.after(10, self._apply_live_input_markdown)
-                except Exception:
-                    pass
-                return "break"
-
-        if focused is inner_out or focused is self.t_out:
-            if is_copy:
-                self._copy_from_widget(inner_out, fallback_all=True)
-                return "break"
-            elif is_sel_all:
-                self._select_all_widget(inner_out)
-                return "break"
-            elif is_paste or is_cut or is_undo or is_redo:
-                return "break"
-
-        for dd in (self.dd_src, self.dd_tgt, self.dd_model):
-            if focused is dd.entry._entry or focused is dd.entry:
-                ent = dd.entry._entry
-                if is_paste:
-                    self._entry_paste(ent, dd)
-                    return "break"
-                elif is_copy:
-                    self._entry_copy(ent)
-                    return "break"
-                elif is_cut:
-                    self._entry_cut(ent, dd)
-                    return "break"
-                elif is_sel_all:
-                    self._entry_select_all(ent)
-                    return "break"
-
-        return None
-
-    def _get_clipboard_safe(self):
-        try:
-            val = self.clipboard_get()
-            if val:
-                return val
-        except Exception:
-            pass
-        if IS_LINUX:
-            for cmd in (["wl-paste", "-n"], ["xclip", "-selection", "clipboard", "-o"], ["xsel", "-ob"]):
-                if shutil.which(cmd[0]):
-                    try:
-                        res = subprocess.run(cmd, capture_output=True, text=True, timeout=1.5)
-                        if res.returncode == 0 and res.stdout:
-                            return res.stdout
-                    except Exception:
-                        pass
-        if pyperclip is not None:
-            try:
-                return pyperclip.paste()
-            except Exception:
-                pass
-        return ""
-
-    def _set_clipboard(self, text):
-        if not text:
-            return
-        try:
-            self.clipboard_clear()
-            self.clipboard_append(text)
-            self.update_idletasks()
-        except Exception:
-            pass
-        if IS_LINUX:
-            for cmd in (["wl-copy"], ["xclip", "-selection", "clipboard"], ["xsel", "-ib"]):
-                if shutil.which(cmd[0]):
-                    try:
-                        subprocess.run(cmd, input=text, text=True, timeout=1.5)
-                        break
-                    except Exception:
-                        pass
-        if pyperclip is not None:
-            try:
-                pyperclip.copy(text)
-            except Exception:
-                pass
-
-    def _entry_copy(self, tk_ent):
-        if not tk_ent:
-            return "break"
-        try:
-            if tk_ent.selection_present():
-                sel = tk_ent.selection_get()
-            else:
-                sel = tk_ent.get()
-            self._set_clipboard(sel)
-        except Exception:
-            pass
-        return "break"
-
-    def _entry_paste(self, tk_ent, dd=None):
-        if not tk_ent:
-            return "break"
-        clip = self._get_clipboard_safe()
-        if not clip:
-            return "break"
-        clip_single = clip.replace("\r", " ").replace("\n", " ").strip()
-        if dd is None:
-            for cand in (self.dd_src, self.dd_tgt, self.dd_model):
-                if tk_ent is cand.entry._entry:
-                    dd = cand
-                    break
-        if dd is not None and not dd._is_editing:
-            dd._is_editing = True
-            tk_ent.delete(0, "end")
-        try:
-            if tk_ent.selection_present():
-                tk_ent.delete("sel.first", "sel.last")
-        except Exception:
-            pass
-        tk_ent.insert("insert", clip_single)
-        if dd is not None:
-            dd.trigger_filter_from_entry()
-        return "break"
-
-    def _entry_cut(self, tk_ent, dd=None):
-        if not tk_ent:
-            return "break"
-        try:
-            if tk_ent.selection_present():
-                sel = tk_ent.selection_get()
-                self._set_clipboard(sel)
-                tk_ent.delete("sel.first", "sel.last")
-                if dd is not None:
-                    dd.trigger_filter_from_entry()
-        except Exception:
-            pass
-        return "break"
-
-    def _entry_select_all(self, tk_ent):
-        if not tk_ent:
-            return "break"
-        try:
-            tk_ent.select_range(0, "end")
-            tk_ent.icursor("end")
-        except Exception:
-            pass
-        return "break"
-
-    def _wrap_input_selection(self, prefix, suffix):
-        tb = self.t_in._textbox
-        try:
-            sel = tb.get("sel.first", "sel.last")
-            tb.delete("sel.first", "sel.last")
-            tb.insert("insert", f"{prefix}{sel}{suffix}")
-        except tk.TclError:
-            tb.insert("insert", f"{prefix}{suffix}")
-            tb.mark_set("insert", f"insert-{len(suffix)}c")
-        self._mark_edited()
-        self._apply_live_input_markdown()
-
-    def _on_input_key_release(self, event=None):
-        self._mark_edited(event)
-        self._apply_live_input_markdown()
-
-    def _on_native_paste_in(self, event=None):
-        self._paste_into_textbox(replace_all=False)
-        return "break"
-
-    def _on_native_cut_in(self, event=None):
-        self._cut_from_input()
-        return "break"
-
-    def _on_window_unmap(self, event=None):
-        if event is not None and event.widget is self:
-            self._close_all_dropdowns()
-
-    @staticmethod
-    def _is_event_inside_widget(event, target_widget):
-        if target_widget is None or not target_widget.winfo_exists():
-            return False
-        try:
-            curr = event.widget
-            while curr is not None:
-                if curr is target_widget:
-                    return True
-                curr = getattr(curr, "master", None)
-            if str(event.widget).startswith(str(target_widget)):
-                return True
-            if target_widget.winfo_ismapped():
-                wx = target_widget.winfo_rootx()
-                wy = target_widget.winfo_rooty()
-                ww = target_widget.winfo_width()
-                wh = target_widget.winfo_height()
-                if wx <= event.x_root <= wx + ww and wy <= event.y_root <= wy + wh:
-                    return True
-        except Exception:
-            pass
-        return False
-
-    def _on_window_unmap(self, event=None):
-        if event is not None and event.widget is self:
-            self._close_all_dropdowns()
-
-    def _on_app_focus_out(self, event=None):
-        def check_focus():
-            try:
-                if self.focus_displayof() is None or self.state() == "iconic" or not self.winfo_viewable():
-                    self._close_all_dropdowns()
-            except Exception:
-                self._close_all_dropdowns()
-        self.after(40, check_focus)
-
-    def _on_window_configure(self, event=None):
-        if event is not None and event.widget is not self:
-            return
-        if self.state() == "iconic" or not self.winfo_viewable():
-            self._close_all_dropdowns()
-            return
-        rect = (self.winfo_x(), self.winfo_y(), self.winfo_width(), self.winfo_height())
-        if rect == self._last_win_rect:
-            return
-        self._last_win_rect = rect
-        for dd in (self.dd_src, self.dd_tgt, self.dd_model):
-            dd._refresh_display_text()
-            if dd._popup_open and dd.dropdown_win and dd.dropdown_win.winfo_exists():
-                dd.sync_position()
-        if self.settings_win and self.settings_win.winfo_exists() and self.settings_win.winfo_ismapped():
-            self._sync_settings_popup_position()
-        self._refresh_status_label_ellipsis()
-
-    def _close_all_dropdowns(self, except_dd=None):
-        for dd in (self.dd_src, self.dd_tgt, self.dd_model):
-            if dd is not except_dd:
-                dd.close_dropdown()
-        if except_dd != "settings":
-            self._close_settings_popup()
-
-    def _mark_edited(self, event=None):
-        if event and event.keysym in ("Control_L", "Control_R", "Shift_L", "Shift_R", "Alt_L", "Alt_R", "Left", "Right", "Up", "Down"):
-            return
-        self._last_edit_time = time.monotonic()
-
-    def _realtime_watcher(self):
-        try:
-            if self.state() == "iconic" or not self.winfo_viewable():
-                self._close_all_dropdowns()
-
-            current_text = self.t_in.get("0.0", "end-1c").strip()
-            elapsed = time.monotonic() - self._last_edit_time
-
-            if not current_text:
-                if self._last_translated_state[0] != "" or self.detected_src_lang is not None:
-                    self._abort_active_stream()
-                    self.stop_tts()
-                    self._last_translated_state = ("", "", "", "")
-                    self._last_clean_translation = ""
-                    self._last_selected_out_text = ""
-                    self._tw_mismatch_langs = None
-                    if self.is_auto_detect:
-                        self.detected_src_lang = None
-                        self.dd_src.set(self._format_auto_detect_display(None))
-                    self._update_swap_button_state()
-                    self.t_out._textbox.delete("1.0", "end")
-                    self.btn_instant.place_forget()
-                    self._stop_status_anim(self._tr("ready"), "#22c55e", 0.0)
-            elif self.chk_auto.get() and self._is_online:
-                tgt_canon = self._get_effective_tgt_lang()
-                if not tgt_canon:
-                    self._stop_status_anim(self._tr("choose_lang_right"), "#eab308", 0.0)
-                elif not self._is_valid_model_selected():
-                    self._stop_status_anim(self._tr("choose_model_bottom"), "#eab308", 0.0)
-                else:
-                    src_mode = self._get_effective_src_mode()
-                    current_state = (current_text, src_mode, tgt_canon, strip_loaded_prefix(self.model_id))
-                    if current_state != self._last_translated_state and elapsed >= 0.35:
-                        self._last_translated_state = current_state
-                        self.start_translation()
-        except Exception:
-            pass
-        finally:
-            self.after(120, self._realtime_watcher)
-
-    def _auto_reconnect_loop(self):
-        if not self._is_online and not self._server_booting:
-            self.fetch_models(silent=True, auto_start_server=False)
-        self.after(5000, self._auto_reconnect_loop)
-
-    def _force_trigger(self):
-        text = self.t_in.get("0.0", "end-1c").strip()
-        if not text:
-            return
-        tgt_canon = self._get_effective_tgt_lang()
-        if not tgt_canon:
-            self._stop_status_anim(self._tr("choose_lang_right"), "#eab308", 0.0)
-            return
-        if not self._is_valid_model_selected():
-            self._stop_status_anim(self._tr("choose_model_bottom"), "#eab308", 0.0)
-            return
-        src_mode = self._get_effective_src_mode()
-        self._last_translated_state = (text, src_mode, tgt_canon, strip_loaded_prefix(self.model_id))
-        self.start_translation()
-
-    def _check_outside_click(self, event):
-        if self.settings_win and self.settings_win.winfo_exists() and self.settings_win.winfo_ismapped():
-            if not (
-                self._is_event_inside_widget(event, self.settings_win)
-                or self._is_event_inside_widget(event, self.btn_settings)
-            ):
-                self._close_settings_popup()
-
-        for dd in (self.dd_src, self.dd_tgt, self.dd_model):
-            if dd._popup_open and dd.dropdown_win and dd.dropdown_win.winfo_exists():
-                if (
-                    self._is_event_inside_widget(event, dd.dropdown_win)
-                    or self._is_event_inside_widget(event, dd)
-                ):
-                    return
-                dd.close_dropdown()
-
-    def _select_all_widget(self, tb):
-        try:
-            tb.focus_set()
-            tb.tag_add("sel", "1.0", "end-1c")
-            tb.mark_set("insert", "end-1c")
-            if tb is self.t_out._textbox:
-                self._remember_output_selection()
-        except Exception:
-            pass
-
-    def _copy_from_widget(self, tb, fallback_all=False):
-        sel = ""
-        try:
-            if tb.tag_ranges("sel"):
-                sel = tb.get("sel.first", "sel.last")
-        except tk.TclError:
-            sel = ""
-
-        if not sel and tb is self.t_out._textbox and self._last_selected_out_text:
-            sel = self._last_selected_out_text
-
-        if sel:
-            self._set_clipboard(sel)
-            self._stop_status_anim(self._tr("copied_sel"), "#3b82f6", 1.0)
-            return
-
-        if fallback_all:
-            self.copy_output()
-
-    def _cut_from_input(self):
-        tb = self.t_in._textbox
-        try:
-            sel = tb.get("sel.first", "sel.last")
-            self._set_clipboard(sel)
-            tb.delete("sel.first", "sel.last")
-            self._mark_edited()
-            self._apply_live_input_markdown()
-        except tk.TclError:
-            pass
-
-    def _paste_into_textbox(self, replace_all=False):
-        clip = self._get_clipboard_safe()
-        if not clip:
-            return
-        tb = self.t_in._textbox
-        tb.focus_set()
-        if replace_all:
-            tb.delete("1.0", "end")
-            tb.insert("1.0", clip)
-        else:
-            try:
-                tb.delete("sel.first", "sel.last")
-            except tk.TclError:
-                pass
-            tb.insert("insert", clip)
-        self._mark_edited()
-        self._apply_live_input_markdown()
-
-    def paste_to_input(self):
-        clip = self._get_clipboard_safe()
-        if clip:
-            self._paste_into_textbox(replace_all=True)
-            if self.chk_auto.get():
-                self._force_trigger()
-
-    def _extract_clean_main_output(self):
-        if self._last_clean_translation:
-            return self._last_clean_translation
-        text = self.t_out.get("0.0", "end-1c").strip()
-        if not text:
-            return ""
-        for wp in (UI_STRINGS["ru"]["warn_prefix"], UI_STRINGS["en"]["warn_prefix"]):
-            if text.startswith(wp) and "\n\n" in text:
-                text = text.split("\n\n", 1)[1].strip()
-        for dv in (UI_STRINGS["ru"]["dict_variants"], UI_STRINGS["en"]["dict_variants"]):
-            if f" — {dv}\n" in text:
-                return text.split("\n\n")[0].strip()
-        return text
-
-    def copy_output(self):
-        try:
-            if self.t_out._textbox.tag_ranges("sel"):
-                sel = self.t_out._textbox.get("sel.first", "sel.last")
-                if sel.strip():
-                    self._set_clipboard(sel)
-                    self._stop_status_anim(self._tr("copied_sel"), "#3b82f6", 1.0)
-                    return
-        except Exception:
-            pass
-
-        main_trans = self._extract_clean_main_output()
-        if main_trans:
-            self._set_clipboard(main_trans)
-            self._stop_status_anim(self._tr("copied"), "#3b82f6", 1.0)
-
-    def _abort_active_stream(self):
-        self._task_id += 1
-        self._tw_running = False
-        self.btn_instant.place_forget()
-        with self._stream_lock:
-            st = self._active_stream
-            self._active_stream = None
-        if st is not None:
-            try:
-                st.close()
-            except Exception:
-                pass
-
-    def clear_all(self):
-        self._abort_active_stream()
-        self.stop_tts()
-        self._last_translated_state = ("", "", "", "")
-        self._last_clean_translation = ""
-        self._last_selected_out_text = ""
-        self._tw_main_target = ""
-        self._tw_dict_sections = []
-        self._tw_mismatch_warning = ""
-        self._tw_mismatch_langs = None
-        self._tw_final_status_msg = ""
-        if self.is_auto_detect:
-            self.detected_src_lang = None
-            self.dd_src.set(self._format_auto_detect_display(None))
-        self._update_swap_button_state()
-        self.t_in.delete("0.0", "end")
-        self.t_out._textbox.delete("1.0", "end")
-        self.btn_go.configure(state="normal")
-        self.btn_stop.configure(state="disabled")
-        self._stop_status_anim(self._tr("ready"), "#22c55e" if self._is_online else THEME["text_muted"], 0.0)
-
-    def swap_languages(self):
-        tgt_canon = self._get_effective_tgt_lang()
-        if not tgt_canon or tgt_canon == "Auto Detect":
-            return
-
-        src_canon = self.detected_src_lang if self.is_auto_detect else self._get_effective_src_mode()
-        if not src_canon or src_canon == "Auto Detect":
-            return
-
-        self.skip_typewriter_animation()
-        self.stop_tts()
-        self.is_auto_detect = False
-        self.detected_src_lang = None
-        self.dd_src.set(self._lang_to_display(tgt_canon))
-        self.dd_tgt.set(self._lang_to_display(src_canon))
-        self._update_swap_button_state()
-        self._save_config()
-
-        main_part = self._extract_clean_main_output()
-        if main_part:
-            self.t_in.delete("0.0", "end")
-            self.t_in.insert("0.0", main_part)
-            self._apply_live_input_markdown()
-        if self.chk_auto.get():
-            self._force_trigger()
-
-    def _run_lms_cmd(self, args_list, timeout=15):
-        try:
-            return subprocess.run(
-                [LMS_BIN] + args_list,
-                shell=False,
-                timeout=timeout,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="ignore",
-                creationflags=subprocess.CREATE_NO_WINDOW if IS_WIN else 0
-            )
-        except Exception:
-            return None
-
-    def _boot_local_lm_studio_server(self):
-        self._server_booting = True
-        try:
-            self._run_lms_cmd(["daemon", "up"], timeout=8)
-            self._run_lms_cmd(["server", "start", "--port", str(LM_PORT), "--cors"], timeout=8)
-            self._run_lms_cmd(["server", "start"], timeout=6)
-
-            for _ in range(6):
-                for host in (LM_HOST, "localhost"):
-                    try:
-                        c = OpenAI(base_url=f"http://{host}:{LM_PORT}/v1", api_key="lm-studio", timeout=2.0)
-                        c.models.list()
-                        return True
-                    except Exception:
-                        pass
-                time.sleep(0.7)
-
-            if LM_STUDIO_GUI_EXE and os.path.isfile(LM_STUDIO_GUI_EXE):
-                try:
-                    if IS_WIN:
-                        si = subprocess.STARTUPINFO()
-                        si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-                        si.wShowWindow = 7
-                        subprocess.Popen(
-                            [LM_STUDIO_GUI_EXE, "--minimized"],
-                            startupinfo=si,
-                            creationflags=subprocess.CREATE_NO_WINDOW
-                        )
-                    else:
-                        subprocess.Popen(
-                            [LM_STUDIO_GUI_EXE],
-                            stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL,
-                            start_new_session=True
-                        )
-                except Exception:
-                    pass
-
-                for _ in range(12):
-                    time.sleep(1.0)
-                    self._run_lms_cmd(["server", "start", "--port", str(LM_PORT), "--cors"], timeout=5)
-                    for host in (LM_HOST, "localhost"):
-                        try:
-                            c = OpenAI(base_url=f"http://{host}:{LM_PORT}/v1", api_key="lm-studio", timeout=2.0)
-                            c.models.list()
-                            return True
-                        except Exception:
-                            pass
-            return False
-        finally:
-            self._server_booting = False
-
-    def start_lm_studio_server_manual(self):
-        if self._server_booting:
-            return
-        self._start_status_anim(self._tr("starting_server"), "#eab308", "#eab308")
-
-        def worker():
-            ok = self._boot_local_lm_studio_server()
-            if ok:
-                self.after(0, lambda: self.fetch_models(silent=False, auto_start_server=False))
-            else:
-                self.after(0, lambda: self._stop_status_anim(self._tr("server_failed"), "#ef4444", 0.0))
-
-        threading.Thread(target=worker, daemon=True).start()
-
-    def _query_lms_ls_downloaded_models(self):
-        models = []
-        res = self._run_lms_cmd(["ls", "--json"], timeout=6)
-        if res and res.stdout:
-            try:
-                data = json.loads(res.stdout)
-                if isinstance(data, list):
-                    for item in data:
-                        m_key = item.get("modelKey") or item.get("id") or item.get("path")
-                        if m_key and "embed" not in m_key.lower():
-                            models.append(m_key)
-            except Exception:
-                pass
-        return models
-
-    def set_model(self, selected_label):
-        new_model = strip_loaded_prefix(selected_label)
-        old_model = strip_loaded_prefix(self.model_id)
-        self.model_id = new_model
-        self._model_switch_id += 1
-        switch_id = self._model_switch_id
-
-        if new_model not in ALL_MODEL_PLACEHOLDERS:
-            self._saved_config_model = new_model
-        self._save_config()
-        self._refresh_model_dropdown_labels()
-
-        should_unload_old = (
-            old_model and old_model != new_model
-            and old_model not in ALL_MODEL_PLACEHOLDERS
-            and old_model in self._loaded_vram_models
-        )
-
-        if should_unload_old:
-            def swap_vram():
-                self._abort_active_stream()
-                self.after(0, lambda: self._start_status_anim(f"{self._tr('unloading')} {old_model[:15]}", "#eab308"))
-                self._verified_unload_single_model(old_model)
-                if self._model_switch_id != switch_id:
-                    return
-                self.after(0, self._refresh_model_dropdown_labels)
-                if new_model in ALL_MODEL_PLACEHOLDERS:
-                    self.after(0, lambda: self._stop_status_anim(self._tr("model_reset"), THEME["text_muted"], 0.0))
-                else:
-                    self.after(0, lambda: self._stop_status_anim(self._tr("model_ready"), "#22c55e", 0.0))
-                    if self.chk_auto.get():
-                        self.after(0, self._force_trigger)
-            threading.Thread(target=swap_vram, daemon=True).start()
-        else:
-            if new_model in ALL_MODEL_PLACEHOLDERS:
-                self._stop_status_anim(self._tr("choose_model_bottom"), "#eab308", 0.0)
-            else:
-                self._stop_status_anim(self._tr("model_ready"), "#22c55e", 0.0)
-                if self.chk_auto.get():
-                    self._force_trigger()
-
-    def fetch_models(self, silent=False, auto_start_server=True):
-        if not silent:
-            self._start_status_anim(self._tr("searching_lms"), "#3b82f6")
-
-        def task():
-            for host in (LM_HOST, "localhost"):
-                try:
-                    test_client = OpenAI(base_url=f"http://{host}:{LM_PORT}/v1", api_key="lm-studio", timeout=2.5)
-                    models = test_client.models.list()
-                    names = [m.id for m in models.data if "embed" not in m.id.lower()]
-                    if not names:
-                        names = self._query_lms_ls_downloaded_models()
-                    self.client = OpenAI(base_url=f"http://{host}:{LM_PORT}/v1", api_key="lm-studio", timeout=20.0)
-                    if names:
-                        self._available_models = names
-                        self._loaded_vram_models = self._query_lms_ps_loaded_models()
-                        self.after(0, lambda n=names: self._update_models_ui(n, True))
-                    else:
-                        self._available_models = []
-                        self._loaded_vram_models = set()
-                        self.after(0, lambda: self._update_models_ui([self._tr("no_models")], False))
-                    return
-                except Exception:
-                    continue
-
-            if auto_start_server and not silent:
-                self.after(0, lambda: self._update_status_anim_phase(self._tr("starting_server"), "#eab308", "#eab308"))
-                if self._boot_local_lm_studio_server():
-                    for host in (LM_HOST, "localhost"):
-                        try:
-                            test_client = OpenAI(base_url=f"http://{host}:{LM_PORT}/v1", api_key="lm-studio", timeout=3.0)
-                            models = test_client.models.list()
-                            names = [m.id for m in models.data if "embed" not in m.id.lower()]
-                            if not names:
-                                names = self._query_lms_ls_downloaded_models()
-                            self.client = OpenAI(base_url=f"http://{host}:{LM_PORT}/v1", api_key="lm-studio", timeout=20.0)
-                            if names:
-                                self._available_models = names
-                                self._loaded_vram_models = self._query_lms_ps_loaded_models()
-                                self.after(0, lambda n=names: self._update_models_ui(n, True))
-                                return
-                        except Exception:
-                            continue
-
-            self._loaded_vram_models = set()
-            self.after(0, lambda: self._update_models_ui([self._tr("offline_model")], False, silent=silent))
-
-        threading.Thread(target=task, daemon=True).start()
-
-    def _update_models_ui(self, names, online, silent=False):
-        self._is_online = online
-        self._sync_server_button_visibility()
-        self._sync_vram_button_visibility()
-        if online:
-            self._available_models = list(names)
-            clean_cur = strip_loaded_prefix(self.model_id)
-            if clean_cur in names:
-                self.model_id = clean_cur
-            elif self._saved_config_model in names:
-                self.model_id = self._saved_config_model
-            else:
-                self.model_id = self._tr("select_model")
-
-            self._refresh_model_dropdown_labels()
-            if self._is_valid_model_selected():
-                self._stop_status_anim(self._tr("lms_online"), "#22c55e", 0.0)
-            else:
-                self._stop_status_anim(self._tr("choose_model_bottom"), "#eab308", 0.0)
-        else:
-            self.dd_model.configure_values(names)
-            self.dd_model.set(names[0])
-            self.model_id = ""
-            if not silent:
-                self._stop_status_anim(self._tr("server_failed"), "#ef4444", 0.0)
-
-    def load_selected_model_to_vram(self):
-        if self._is_loading_model or not self._is_online or not self._is_valid_model_selected():
-            return
-        target_model = strip_loaded_prefix(self.model_id)
-        if target_model in self._loaded_vram_models:
-            self._sync_vram_button_visibility()
-            return
-
-        self._is_loading_model = True
-        self.btn_load_model.configure(state="disabled")
-        self._start_status_anim(f"{self._tr('loading_vram')}: {target_model[:18]}", "#eab308", "#eab308")
-
-        def task():
-            try:
-                if self._loaded_vram_models:
-                    self._verified_unload_all_vram(timeout_per_step=8)
-                self._run_lms_cmd(["load", target_model, "-y"], timeout=45)
-                loaded_now = self._query_lms_ps_loaded_models()
-                if target_model not in loaded_now:
-                    try:
-                        self.client.chat.completions.create(
-                            model=target_model,
-                            messages=[{"role": "user", "content": "ok"}],
-                            max_tokens=1,
-                            stream=False
-                        )
-                        loaded_now.add(target_model)
-                    except Exception:
-                        pass
-                self._loaded_vram_models = loaded_now if loaded_now else {target_model}
-                self.after(0, self._refresh_model_dropdown_labels)
-                self.after(0, lambda: self._stop_status_anim(self._tr("model_ready"), "#22c55e", 1.0))
-                if self.chk_auto.get() and self.t_in.get("0.0", "end-1c").strip():
-                    self.after(0, self._force_trigger)
-            finally:
-                self._is_loading_model = False
-                self.after(0, lambda: self.btn_load_model.configure(state="normal"))
-
-        threading.Thread(target=task, daemon=True).start()    
-
-    def unload_vram(self):
-        if not self._loaded_vram_models:
-            self._sync_vram_button_visibility()
-            self._stop_status_anim(self._tr("vram_already_empty"), "#22c55e", 0.0)
-            return
-
-        def task():
-            self._abort_active_stream()
-            self.after(0, lambda: self._start_status_anim(self._tr("vram_check"), "#eab308"))
-            all_clean = self._verified_unload_all_vram()
-            self.after(0, self._refresh_model_dropdown_labels)
-            if all_clean:
-                self.after(0, lambda: self._stop_status_anim(self._tr("vram_cleaned_all"), "#22c55e", 0.0))
-            else:
-                self.after(0, lambda: self._stop_status_anim(self._tr("vram_cleaned"), "#eab308", 0.0))
-        threading.Thread(target=task, daemon=True).start()
-
-    def stop_translation(self):
-        self._abort_active_stream()
-        self.btn_go.configure(state="normal")
-        self.btn_stop.configure(state="disabled")
-        self._stop_status_anim(self._tr("stopped"), "#eab308", 0.0)
-
+    # --- Text Processing & Parsing ---
     def _normalize_lang_name(self, raw_lang):
         if not raw_lang:
             return None
@@ -4231,7 +4453,7 @@ class LLMTranslateApp(ctk.CTk):
         if clean in LANG_RU_TO_EN:
             return LANG_RU_TO_EN[clean]
         for k, (ru_name, aliases) in LANG_DATA.items():
-            if k != "Auto Detect" and (clean in k.lower() or clean == ru_name.lower() or clean in aliases.lower().split()):
+            if k not in AUTO_MODES_CANON and (clean in k.lower() or clean == ru_name.lower() or clean in aliases.lower().split()):
                 return k
         return raw_lang.strip(" <>[].,:;\"'").title()
 
@@ -4240,42 +4462,31 @@ class LLMTranslateApp(ctk.CTk):
         if not norm:
             return None
         self.detected_src_lang = norm
-        if self.is_auto_detect:
-            self.dd_src.set(self._format_auto_detect_display(norm))
+        if self.auto_detect_mode:
+            self.dd_src.set(self._format_auto_detect_display(self.auto_detect_mode, norm))
         self._update_swap_button_state()
         return norm
-
-    def _find_corrupted_words(self, translated_text, original_text, tgt_lang):
-        corrupted = []
-        if tgt_lang in CYRILLIC_LANGUAGES:
-            hybrids = RE_CYR_LAT_MIXED_WORD.findall(translated_text)
-            corrupted.extend(hybrids)
-
-            orig_latin = {w.lower() for w in RE_LATIN_WORDS.findall(original_text)}
-            for lw in RE_LATIN_WORDS.findall(translated_text):
-                low = lw.lower()
-                if low in ALLOWED_LATIN_ACRONYMS or low in ("lang", "main", "dict"):
-                    continue
-                if low not in orig_latin:
-                    corrupted.append(lw)
-                elif len(original_text.split()) > 4 and low in orig_latin and not lw[0].isupper():
-                    corrupted.append(lw)
-        return list(dict.fromkeys(corrupted))
 
     def _clean_output_text(self, text, tgt_lang, src_text=""):
         text = RE_THINK_BLOCKS.sub("", text)
         text = RE_UNCLOSED_THINK.sub("", text)
-        text = re.sub(r"<lang>.*?</lang>", "", text, flags=re.IGNORECASE | re.DOTALL)
-        text = re.sub(r"<lang>[^\n]*$", "", text, flags=re.IGNORECASE)
-
+        text = re.sub(r"<lang>[^<\n]{1,45}</?lang>", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"</?lang>", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"^\s*<lang>[^\n]*$", "", text, flags=re.IGNORECASE)
         text = RE_SPECIAL_TOKENS.sub("", text)
 
         if tgt_lang not in CJK_LANGUAGES:
             text = RE_CJK_GARBAGE.sub("", text)
             text = re.sub(r"\n\s*[,.\s]+\s*$", "", text)
 
-        if src_text and not RE_EMOJI_CHARS.search(src_text):
-            text = RE_EMOJI_CHARS.sub("", text)
+        if src_text:
+            if not RE_EMOJI_CHARS.search(src_text):
+                text = RE_EMOJI_CHARS.sub("", text)
+            if "**" not in src_text and "__" not in src_text and "*" not in src_text:
+                parts = re.split(r"(```[\s\S]*?```|`[^`\n]+`)", text)
+                for idx_p in range(0, len(parts), 2):
+                    parts[idx_p] = re.sub(r"\*{1,3}([^*\n]+?)\*{1,3}", r"\1", parts[idx_p])
+                text = "".join(parts)
 
         return text.strip()
 
@@ -4286,16 +4497,8 @@ class LLMTranslateApp(ctk.CTk):
 
         input_word_low = re.sub(r"[*_`~+.,:;!?'\"()\[\]]", "", word).strip().lower()
 
-        main_match = re.search(
-            r"<main>\s*(.*?)\s*(?:</main>|<dict>|\n\s*\[|$)",
-            cleaned_raw,
-            flags=re.DOTALL | re.IGNORECASE
-        )
-        dict_match = re.search(
-            r"<dict>\s*(.*?)\s*(?:</dict>|$)",
-            cleaned_raw,
-            flags=re.DOTALL | re.IGNORECASE
-        )
+        main_match = re.search(r"<main>\s*(.*?)\s*(?:</main>|<dict>|\n\s*\[|$)", cleaned_raw, flags=re.DOTALL | re.IGNORECASE)
+        dict_match = re.search(r"<dict>\s*(.*?)\s*(?:</dict>|$)", cleaned_raw, flags=re.DOTALL | re.IGNORECASE)
 
         if main_match:
             main_raw = main_match.group(1).strip().rstrip(":.")
@@ -4373,9 +4576,7 @@ class LLMTranslateApp(ctk.CTk):
                     sections.append((pos_part, []))
                     continue
 
-            if sections and not sections[-1][1]:
-                sections[-1][1].append(clean_line.rstrip(":"))
-            elif sections:
+            if sections:
                 sections[-1][1].append(clean_line.rstrip(":"))
             else:
                 sections.append((None, [clean_line.rstrip(":")]))
@@ -4435,7 +4636,7 @@ class LLMTranslateApp(ctk.CTk):
 
             if filtered_syns:
                 if h_low and h_low in seen_headers:
-                    for _, (ex_h, ex_list) in enumerate(valid_sections):
+                    for ex_h, ex_list in valid_sections:
                         if (ex_h or "").lower() == h_low:
                             ex_list.extend(filtered_syns)
                             break
@@ -4459,7 +4660,6 @@ class LLMTranslateApp(ctk.CTk):
         main_word, _ = self._parse_dict_response(cleaned_text, input_word)
         clean_cand = re.sub(r"[*_`~+.,:;!?'\"()\[\]]", "", main_word).strip().lower()
         clean_inp = re.sub(r"[*_`~+.,:;!?'\"()\[\]]", "", input_word).strip().lower()
-
         if not clean_cand or clean_cand == clean_inp:
             return True
         if tgt_lang in CYRILLIC_LANGUAGES and not RE_CYRILLIC_CHARS.search(clean_cand):
@@ -4518,16 +4718,14 @@ class LLMTranslateApp(ctk.CTk):
             self._tw_final_status_msg = final_msg
             self._tw_final_status_color = final_color
 
-        if not self._tw_running:
-            self._tw_running = True
-            self._typewriter_tick()
+        self._tw_running = True
 
     def skip_typewriter_animation(self):
         if not self._tw_main_target and not self._tw_target_text:
-            self.btn_instant.place_forget()
+            self.btn_instant.hide()
             return
         self._tw_displayed_chars = float(len(self._tw_main_target))
-        self.btn_instant.place_forget()
+        self.btn_instant.hide()
         self._render_phased_output(
             self._tw_main_target,
             self._tw_dict_sections if self._tw_stream_finished else [],
@@ -4543,7 +4741,8 @@ class LLMTranslateApp(ctk.CTk):
 
     def _typewriter_tick(self):
         if not self._tw_running or self._tw_task_id != self._task_id:
-            self.btn_instant.place_forget()
+            if self.btn_instant.isVisible():
+                self.btn_instant.hide()
             return
 
         total_main_len = len(self._tw_main_target)
@@ -4551,11 +4750,11 @@ class LLMTranslateApp(ctk.CTk):
 
         if cur_len < total_main_len:
             if total_main_len <= 35:
-                chars_per_sec = 36.0
+                chars_per_sec = 42.0
             elif total_main_len <= 140:
-                chars_per_sec = 65.0
+                chars_per_sec = 75.0
             else:
-                chars_per_sec = max(85.0, min(self._tw_tok_speed * 2.5, 220.0))
+                chars_per_sec = max(95.0, min(self._tw_tok_speed * 2.8, 250.0))
 
             step = max(1.0, chars_per_sec * 0.025)
             self._tw_displayed_chars = min(float(total_main_len), self._tw_displayed_chars + step)
@@ -4578,14 +4777,12 @@ class LLMTranslateApp(ctk.CTk):
 
             remaining = total_main_len - new_len
             if (self._tw_stream_finished and remaining > 8) or remaining > 45:
-                self.btn_instant.place(relx=1.0, rely=1.0, x=-18, y=-12, anchor="se")
-                self.btn_instant.lift()
+                self.btn_instant.show()
+                self.btn_instant.raise_()
             else:
-                self.btn_instant.place_forget()
-
-            self.after(25, self._typewriter_tick)
+                self.btn_instant.hide()
         else:
-            self.btn_instant.place_forget()
+            self.btn_instant.hide()
             if self._tw_stream_finished:
                 self._tw_running = False
                 self._render_phased_output(
@@ -4608,73 +4805,100 @@ class LLMTranslateApp(ctk.CTk):
                     self._tw_mismatch_warning,
                     dict_pending=self._tw_is_dict_mode
                 )
-                self.after(95, self._typewriter_tick)
+
+    def _render_direct_text(self, text):
+        self.t_out.setPlainText(text)
+
+    def _format_inline_md_html(self, line):
+        esc = html.escape(line)
+        esc = re.sub(
+            r"`([^`\n]+)`",
+            rf"<code style='background:{THEME['code_bg']};color:{THEME['code_fg']};font-family:{MONO_FONT};padding:1px 4px;'>\1</code>",
+            esc
+        )
+        esc = re.sub(r"\*\*\*([^*]+)\*\*\*", r"<b><i>\1</i></b>", esc)
+        esc = re.sub(r"\*\*([^*]+)\*\*", r"<b>\1</b>", esc)
+        esc = re.sub(r"\*([^*]+)\*", r"<i>\1</i>", esc)
+        esc = re.sub(r"~~([^~]+)~~", r"<s>\1</s>", esc)
+        return esc
+
+    def _md_to_html(self, text):
+        segments = re.split(r"(```[\s\S]*?```)", text)
+        out_parts = []
+        for seg in segments:
+            if not seg:
+                continue
+            if seg.startswith("```") and seg.endswith("```") and len(seg) >= 6:
+                inner = seg[3:-3]
+                lang_label = ""
+                if "\n" in inner:
+                    first_ln, rest_code = inner.split("\n", 1)
+                    if re.match(r"^[a-zA-Z0-9_+\-#]{1,18}$", first_ln.strip()):
+                        lang_label = first_ln.strip().upper()
+                        inner = rest_code
+                inner = html.escape(inner.strip("\r\n"))
+                hdr = f"<div style='color:{THEME['text_muted']};font-size:10px;font-weight:bold;'>{lang_label}</div>" if lang_label else ""
+                out_parts.append(
+                    f"<div style='background:{THEME['codeblock_bg']};color:{THEME['codeblock_fg']};"
+                    f"font-family:{MONO_FONT};font-size:13px;padding:8px;margin:4px 0;white-space:pre-wrap;'>"
+                    f"{hdr}{inner}</div>"
+                )
+            else:
+                lines_html = []
+                for ln in seg.split("\n"):
+                    h_m = re.match(r"^#{1,3}\s+(.+)$", ln)
+                    q_m = re.match(r"^>\s+(.+)$", ln)
+                    if h_m:
+                        lines_html.append(f"<span style='font-size:17px;font-weight:bold;color:{THEME['border_focus']};'>{self._format_inline_md_html(h_m.group(1))}</span>")
+                    elif q_m:
+                        lines_html.append(f"<span style='color:{THEME['text_muted']};font-style:italic;'>▎ {self._format_inline_md_html(q_m.group(1))}</span>")
+                    else:
+                        lines_html.append(self._format_inline_md_html(ln))
+                out_parts.append("<br>".join(lines_html))
+        return "".join(out_parts)
 
     def _render_phased_output(self, main_text_part, dict_sections_to_show, is_dict_mode, word="", mismatch_warning="", dict_pending=False):
-        tb = self.t_out._textbox
+        sb = self.t_out.verticalScrollBar()
+        old_scroll = sb.value()
+        base_px = max(10, int(round(15 * (self.ui_scale / 100.0))))
 
-        saved_sel = None
-        try:
-            if tb.tag_ranges("sel"):
-                saved_sel = (tb.index("sel.first"), tb.index("sel.last"))
-        except Exception:
-            saved_sel = None
-        yview_pos = tb.yview()
-
-        tb.delete("1.0", "end")
-
+        blocks = []
         if mismatch_warning:
-            tb.insert("end", mismatch_warning + "\n\n", "warn_banner")
+            blocks.append(f"<div style='color:#f59e0b;font-weight:bold;margin-bottom:10px;'>{html.escape(mismatch_warning)}</div>")
 
         if main_text_part:
             self._last_clean_translation = main_text_part
-            self._insert_markdown_styled_text(tb, main_text_part, default_tag="main_trans")
+            blocks.append(f"<div style='color:{THEME['text_main']};font-size:{base_px}px;'>{self._md_to_html(main_text_part)}</div>")
 
         if is_dict_mode:
             if dict_sections_to_show:
-                tb.insert("end", "\n\n", "main_trans")
-                tb.insert("end", f"{word} — {self._tr('dict_variants')}\n", "dict_title")
+                blocks.append(f"<div style='margin-top:14px;color:{THEME['text_muted']};font-style:italic;font-size:{max(9, base_px - 2)}px;'>{html.escape(word)} — {html.escape(self._tr('dict_variants'))}</div>")
                 for pos_h, syns_list in dict_sections_to_show:
                     if pos_h:
                         loc_h = self._translate_pos_header(pos_h)
                         h_low = loc_h.lower()
                         if any(k in h_low for k in ("исконн", "native", "значени", "meaning", "аналог")):
-                            tag_to_use = "native_header"
+                            col = "#10b981"
                         elif any(k in h_low for k in ("фразеологизм", "идиом", "idiom", "phras")):
-                            tag_to_use = "idiom_header"
+                            col = "#a855f7"
                         else:
-                            tag_to_use = "pos_header"
-                        tb.insert("end", f"\n{loc_h}\n", tag_to_use)
-                    else:
-                        tb.insert("end", "\n", "dict_body")
+                            col = THEME["border_focus"]
+                        blocks.append(f"<div style='margin-top:8px;color:{col};font-weight:bold;font-size:{max(10, base_px - 1)}px;'>{html.escape(loc_h)}</div>")
                     for s_line in syns_list:
-                        tb.insert("end", f"    {s_line}\n", "dict_body")
+                        blocks.append(f"<div style='margin-left:14px;color:{THEME['text_main']};font-size:{max(9, base_px - 2)}px;'>{html.escape(s_line)}</div>")
             elif dict_pending and main_text_part:
-                wave_frames = [
-                    "•  ·  ·",
-                    "·  •  ·",
-                    "·  ·  •",
-                    "·  •  ·",
-                ]
-                dots_str = wave_frames[self._dict_dots_step % len(wave_frames)]
-                tb.insert("end", "\n\n", "main_trans")
-                tb.insert("end", f"{word} — {self._tr('dict_variants')}\n", "dict_title")
-                tb.insert("end", f"\n{dots_str}\n", "dict_pending_dots")
+                wave_frames = ["•  ·  ·", "·  •  ·", "·  ·  •", "·  •  ·"]
+                dots = wave_frames[self._dict_dots_step % len(wave_frames)]
+                blocks.append(f"<div style='margin-top:14px;color:{THEME['text_muted']};font-style:italic;font-size:{max(9, base_px - 2)}px;'>{html.escape(word)} — {html.escape(self._tr('dict_variants'))}</div>")
+                blocks.append(f"<div style='margin-top:6px;color:{THEME['border_focus']};font-weight:bold;font-size:{base_px + 1}px;'>{dots}</div>")
 
-        if saved_sel:
-            try:
-                tb.tag_add("sel", saved_sel[0], saved_sel[1])
-            except Exception:
-                pass
-
+        self.t_out.setHtml("".join(blocks))
         if self._tw_running:
-            tb.see("end")
-        elif yview_pos:
-            try:
-                tb.yview_moveto(yview_pos[0])
-            except Exception:
-                pass
+            sb.setValue(sb.maximum())
+        else:
+            sb.setValue(old_scroll)
 
+    # --- Prompts & OpenAI API ---
     def _build_prompts(self, text, src_mode, tgt_lang, is_dict_mode):
         has_emojis = bool(RE_EMOJI_CHARS.search(text))
         emoji_rule = (
@@ -4682,64 +4906,102 @@ class LLMTranslateApp(ctk.CTk):
             if has_emojis else
             "STRICT EMOJI BAN: The input contains NO emojis. NEVER add or invent emojis/emoticons."
         )
-        src_hint = f"from {src_mode} " if src_mode and src_mode != "Auto Detect" else ""
+        src_hint = f"from {src_mode} " if src_mode and src_mode not in AUTO_MODES_CANON else ""
         cat_lang = "Russian" if self.ui_lang == "ru" else "English"
         idiom_header = "[фразеологизмы и идиомы]" if self.ui_lang == "ru" else "[idioms & phrases]"
         native_header = "[исконные аналоги / значение]" if self.ui_lang == "ru" else "[native equivalents / meaning]"
 
+        lang_detect_instruction = (
+            "Identify the TRUE language of the source text by its vocabulary and grammar (NOT just the alphabet! "
+            "For example: 'In principio creavit Deus caelum et terram' is Latin -> <lang>Latin</lang>; "
+            "'Bonjour le monde' is French -> <lang>French</lang>; 'Hello world' is English -> <lang>English</lang>)."
+        )
+
         if is_dict_mode:
             sys_prompt = (
                 f"You are an authoritative bilingual translator, lexicographer, and etymology/slang expert translating {src_hint}into {tgt_lang}.\n"
-                f"Analyze the exact grammatical form, tense, slang meaning, loanword status, and idiomatic usage of the input.\n\n"
                 f"STRICT RULES:\n"
-                f"1. Line 1: Output the source language in English inside <lang>...</lang> (e.g., <lang>English</lang>).\n"
-                f"2. Line 2: Inside <main>...</main>, output ONLY the single best, most natural translation in {tgt_lang} matching the exact form/idiom of the input (e.g., for 'wasted' -> <main>потрачено</main>; for 'break a leg' -> <main>ни пуха ни пера</main>). NEVER repeat the untranslated source word inside <main>!\n"
-                f"3. AI JUDGMENT ON ALTERNATIVES, NATIVE EQUIVALENTS & IDIOMS (<dict>...</dict>):\n"
-                f"   - YOU DECIDE whether dictionary alternatives, native equivalents, or idioms are useful for this input.\n"
-                f"   - Put EVERY category on its OWN NEW LINE starting with `[Category Name]`.\n"
-                f"   - PARTS OF SPEECH: If the word has synonyms/variants, group them under headers in {cat_lang} (e.g., [причастие / предикатив], [прилагательное], [глагол], [существительное], [сленг]).\n"
-                f"   - ANGLICISMS, LOANWORDS & SLANG ({native_header}): If the input is slang, an anglicism, a modern buzzword, or a word often transliterated/borrowed (e.g. cringe/кринж, vibe/вайб, deadline/дедлайн, rofl, flex, wasted, chill, toxic), include {native_header} on a new line with pure, native {tgt_lang} equivalents and clear meaning (for example, for 'cringe': испанский стыд, неловкость, коробит; for 'vibe': атмосфера, настрой, энергетика).\n"
-                f"   - IDIOMS ({idiom_header}): Include {idiom_header} on a new line ONLY if natural idioms, phraseologisms, or set expressions genuinely exist for this word/concept. Otherwise omit it.\n"
-                f"   - If the input is unambiguous and needs NO variants at all, leave <dict></dict> empty!\n"
-                f"4. NEVER output paronym errors (never write 'бесценный' for 'wasted'; write 'бесцельный, напрасный, потраченный впустую, убитый, в хлам').\n"
-                f"5. {emoji_rule}"
+                f"1. Line 1: {lang_detect_instruction} Output the language name in English inside <lang>...</lang>.\n"
+                f"2. Line 2: Inside <main>...</main>, output ONLY the single best, most natural translation in {tgt_lang}. NEVER repeat the untranslated source word inside <main>!\n"
+                f"3. Inside <dict>...</dict>, put EVERY category on its OWN NEW LINE starting with `[Category Name]` in {cat_lang}. Include {native_header} if slang/loanword, and {idiom_header} ONLY if genuine idioms exist. Leave <dict></dict> empty if no variants are needed.\n"
+                f"4. {emoji_rule}"
             )
             user_instruction = (
-                f"Translate \"{text}\" {src_hint}into {tgt_lang} using this exact multi-line structure (each [Category] MUST start on a new line):\n"
-                f"<lang>SourceLanguageInEnglish</lang>\n"
+                f"Translate \"{text}\" {src_hint}into {tgt_lang}:\n"
+                f"<lang>TrueLanguageInEnglish</lang>\n"
                 f"<main>Best translation in {tgt_lang}</main>\n"
                 f"<dict>\n"
-                f"[Part of speech in {cat_lang}] synonym 1, synonym 2, synonym 3\n"
-                f"{native_header} pure native {tgt_lang} equivalents / slang meaning (include if slang or loanword)\n"
-                f"{idiom_header} idiom 1, set phrase 2 (include ONLY if genuine idioms exist)\n"
+                f"[Part of speech in {cat_lang}] synonym 1, synonym 2\n"
                 f"</dict>"
             )
             return sys_prompt, [user_instruction]
 
+        has_md = bool(RE_MD_TOKEN.search(text) or re.search(r"(?:^|\n)(?:#{1,3}|>)\s+", text))
+        md_rule = (
+            f"3. MARKDOWN & CODE BLOCKS: Preserve existing formatting markers (`inline code`, ```code blocks```, **bold**, *italic*, # headers, > quotes). "
+            f"Inside code blocks, keep syntax intact and translate only string literals/comments into {tgt_lang}."
+            if has_md else
+            "3. STRICT PLAIN TEXT: The source text has NO bold or italic formatting. NEVER add **bold** or *italic* asterisks. Output clean plain text."
+        )
+
+        lang_rule = (
+            f"1. LANGUAGE DETECTION: {lang_detect_instruction} Output `<lang>TrueLanguageInEnglish</lang>` on line 1, then immediately translate the text into {tgt_lang}."
+        )
+
         raw_chunks = self._split_into_chunks(text, max_chars=1800)
         chunks = [
-            f"Translate the following text {src_hint}into pure {tgt_lang} (start with <lang>SourceLanguage</lang> on line 1, preserve any Markdown formatting like **bold**, *italic*, `code`):\n"
+            f"Translate the text inside <source_text> {src_hint}into {tgt_lang}. Every sentence must be translated:\n"
             f"<source_text>\n{c}\n</source_text>"
             for c in raw_chunks
         ]
 
         sys_prompt = (
-            f"You are an elite literary, technical, and localization translator (like DeepL Pro) into {tgt_lang}.\n"
+            f"You are an elite literary and technical translator translating {src_hint}into {tgt_lang}.\n"
             f"CRITICAL RULES:\n"
-            f"1. LANGUAGE DETECTION: On the very first line, output the source language name in English inside <lang>...</lang> tags (for example, <lang>Latin</lang> or <lang>English</lang>). Always translate from the text's TRUE language.\n"
-            f"2. 100% PURE {tgt_lang.upper()} VOCABULARY & IDIOMS: Translate every single sentence idiomatically and accurately into pure {tgt_lang}. Adapt idioms and cultural expressions naturally. Never mix Latin and Cyrillic letters inside words. Translate technical terms properly (e.g. 'Silicon' in computing is 'кремниевый', 'Transformers' in AI is 'трансформеры', 'High-Dimensional' is 'многомерные/высокоразмерные', 'Alignment' is 'согласование/выравнивание', 'Sycophancy' is 'подхалимство/лесть').\n"
-            f"3. MARKDOWN & SPECIAL FORMATTING: If the source text uses special formatting markers such as **bold**, *italic*, ***bold italic***, `inline monolith/code`, ```code blocks```, ~~strikethrough~~, ++underline++, # headers, or > quotes, you MUST preserve those exact markers around the corresponding translated words/phrases.\n"
+            f"{lang_rule}\n"
+            f"2. 100% PURE {tgt_lang.upper()} TRANSLATION: Translate accurately and idiomatically into {tgt_lang}.\n"
+            f"{md_rule}\n"
             f"4. EMOJI POLICY: {emoji_rule}\n"
-            f"5. COMPLETENESS: Do not skip any paragraphs, headers, or numbered items. Output ONLY <lang>...</lang> followed by the translation."
+            f"5. Output ONLY `<lang>...</lang>` on line 1 followed by the translation in {tgt_lang}."
         )
+        if self.enable_thinking:
+            sys_prompt += "\n6. THINKING MODE ENABLED: Reason briefly inside <think>...</think> before outputting <lang>...</lang> and the translation."
+        else:
+            sys_prompt += "\n6. DIRECT OUTPUT: Do NOT output <think> tags. Start immediately with <lang>...</lang> and the translation."
+
         return sys_prompt, chunks
 
-    def _create_chat_completion_universal(self, model_name, sys_prompt, user_payload, stream=True, temperature=0.0):
+    def _build_vision_prompts(self, extra_text, src_mode, tgt_lang):
+        src_hint = f"from {src_mode} " if src_mode and src_mode not in AUTO_MODES_CANON else ""
+        sys_prompt = (
+            f"You are an elite OCR and visual localization translator into {tgt_lang}.\n"
+            f"CRITICAL RULES:\n"
+            f"1. LANGUAGE DETECTION: On line 1, output the true detected source language of the image text in English inside <lang>...</lang> tags (distinguish Latin, English, French, Spanish, etc. by vocabulary).\n"
+            f"2. ACCURATE OCR & TRANSLATION: Read all visible text in the image and translate it accurately {src_hint}into pure {tgt_lang}.\n"
+            f"3. Output ONLY <lang>...</lang> on line 1 followed immediately by the translated text. Do not describe the image."
+        )
+        user_instr = f"Extract and translate all text from this image {src_hint}into {tgt_lang}."
+        if extra_text:
+            user_instr += f"\nAdditional context:\n{extra_text}"
+        if not self.enable_thinking:
+            sys_prompt += "\n4. DIRECT OUTPUT: Do NOT output <think> blocks."
+        return sys_prompt, [user_instr]
+
+    def _create_chat_completion_universal(self, model_name, sys_prompt, user_payload, stream=True, temperature=0.0, image_b64=""):
+        if image_b64:
+            user_content = [
+                {"type": "text", "text": user_payload},
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}}
+            ]
+        else:
+            user_content = user_payload
+
         messages_std = [
             {"role": "system", "content": sys_prompt},
-            {"role": "user", "content": user_payload}
+            {"role": "user", "content": user_content}
         ]
         stop_tokens = ["</source_text>", "<|im_end|>", "<|eot_id|>", "<|END_OF_TURN_TOKEN|>"]
+        reasoning_effort = "medium" if self.enable_thinking else "none"
 
         try:
             return self.client.chat.completions.create(
@@ -4750,12 +5012,12 @@ class LLMTranslateApp(ctk.CTk):
                 top_p=0.85,
                 frequency_penalty=0.05,
                 presence_penalty=0.0,
-                stop=stop_tokens
+                stop=stop_tokens,
+                extra_body={"reasoning_effort": reasoning_effort}
             )
         except Exception as e1:
             err_str = str(e1).lower()
-            if "model" in err_str and ("not loaded" in err_str or "not found" in err_str or "no model" in err_str):
-                self._run_lms_cmd(["load", model_name, "-y"], timeout=25)
+            if any(k in err_str for k in ("reasoning", "extra", "unrecognized", "400", "system")):
                 try:
                     return self.client.chat.completions.create(
                         model=model_name,
@@ -4767,19 +5029,38 @@ class LLMTranslateApp(ctk.CTk):
                 except Exception:
                     pass
 
-            merged_messages = [{"role": "user", "content": f"{sys_prompt}\n\n{user_payload}"}]
+            if image_b64:
+                merged_content = [
+                    {"type": "text", "text": f"{sys_prompt}\n\n{user_payload}"},
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}}
+                ]
+            else:
+                merged_content = f"{sys_prompt}\n\n{user_payload}"
             return self.client.chat.completions.create(
                 model=model_name,
-                messages=merged_messages,
+                messages=[{"role": "user", "content": merged_content}],
                 stream=stream,
                 temperature=temperature
             )
 
     def start_translation(self):
-        text = self.t_in.get("0.0", "end-1c").strip()
+        text = self.t_in.toPlainText().strip()
+        image_b64 = self._attached_image_b64
+        has_img = bool(image_b64)
         tgt_lang = self._get_effective_tgt_lang()
-        if not text or not tgt_lang or not self._is_valid_model_selected():
+        if (not text and not has_img) or not tgt_lang:
             return
+
+        if has_img:
+            active_model = self._resolve_effective_vision_model()
+            if not active_model:
+                self._stop_status_anim(self._tr("no_vision_err"), "#ef4444", 0.0)
+                return
+            self._update_image_banner_ui()
+        else:
+            if not self._is_valid_model_selected():
+                return
+            active_model = strip_loaded_prefix(self.model_id)
 
         self._abort_active_stream()
         self.stop_tts()
@@ -4796,39 +5077,61 @@ class LLMTranslateApp(ctk.CTk):
         self._tw_final_status_msg = ""
         self._tw_running = False
         self._dict_dots_step = 0
-        self._last_selected_out_text = ""
-        self.t_out._textbox.delete("1.0", "end")
+        self.t_out.clear()
 
-        self.btn_go.configure(state="disabled")
-        self.btn_stop.configure(state="normal")
+        self._set_btn_enabled_with_cursor(self.btn_go, False)
+        self.btn_stop.show()
+        self._refresh_button_icons()
 
         src_mode = self._get_effective_src_mode()
-        active_model = strip_loaded_prefix(self.model_id)
+        fast_guessed_lang = None
+        if self.auto_detect_mode == "fast" and text:
+            fast_guessed_lang = fast_detect_language_by_script(text)
+            if fast_guessed_lang:
+                self._apply_detected_language_ui(fast_guessed_lang)
 
         if active_model not in self._loaded_vram_models:
-            self._start_status_anim(self._tr("loading_vram"), "#eab308", "#eab308")
+            self._start_status_anim(f"{self._tr('loading_vram')}: {active_model}", "#eab308")
+        elif has_img:
+            self._start_status_anim(self._tr("img_translating"), "#3b82f6")
         else:
-            self._start_status_anim(self._tr("translating"), "#3b82f6", "#3b82f6")
+            self._start_status_anim(self._tr("translating"), "#3b82f6")
 
         plain_probe = re.sub(r"[*_`~+]", "", text).strip()
         words = plain_probe.split()
         is_dict_mode = (
-            1 <= len(words) <= 6
+            (not has_img)
+            and 1 <= len(words) <= 6
             and len(plain_probe) <= 65
             and "\n" not in plain_probe
             and not any(plain_probe.endswith(p) for p in (".", "!", "?", ";", ":"))
         )
         self._tw_is_dict_mode = is_dict_mode
         self._tw_word = plain_probe
-        sys_prompt, chunks = self._build_prompts(text, src_mode, tgt_lang, is_dict_mode)
+
+        effective_prompt_src = fast_guessed_lang if (self.auto_detect_mode == "fast" and fast_guessed_lang) else src_mode
+        if has_img:
+            sys_prompt, chunks = self._build_vision_prompts(text, effective_prompt_src, tgt_lang)
+        else:
+            sys_prompt, chunks = self._build_prompts(text, effective_prompt_src, tgt_lang, is_dict_mode)
 
         def ai_worker():
             local_stream = None
+            completed_chunks_text = ""
             try:
-                completed_chunks_text = ""
+                if active_model not in self._loaded_vram_models:
+                    self.sig.statusAnimPhase.emit(f"{self._tr('loading_vram')}: {active_model}", "#eab308")
+                    self._ensure_model_loaded_in_vram(active_model, unload_others=True)
+                    if self._task_id != current_task:
+                        return
+                    self.sig.statusAnimPhase.emit(
+                        self._tr("img_translating") if has_img else self._tr("translating"),
+                        "#3b82f6"
+                    )
+
                 total_tokens = 0
                 gen_start_ts = None
-                detected_lang_final = None
+                detected_lang_final = fast_guessed_lang
                 mismatch_banner = ""
 
                 for idx, payload in enumerate(chunks):
@@ -4836,85 +5139,77 @@ class LLMTranslateApp(ctk.CTk):
                         return
 
                     local_stream = self._create_chat_completion_universal(
-                        active_model, sys_prompt, payload, stream=True, temperature=0.0
+                        active_model, sys_prompt, payload, stream=True, temperature=0.0,
+                        image_b64=(image_b64 if has_img else "")
                     )
                     with self._stream_lock:
                         self._active_stream = local_stream
 
                     chunk_accumulated = ""
-                    for part in local_stream:
-                        if self._task_id != current_task:
-                            return
-                        delta = part.choices[0].delta if (part.choices and len(part.choices) > 0) else None
-                        if delta is None:
-                            continue
+                    try:
+                        for part in local_stream:
+                            if self._task_id != current_task:
+                                return
+                            delta = part.choices[0].delta if (part.choices and len(part.choices) > 0) else None
+                            if delta is None:
+                                continue
 
-                        content_piece = getattr(delta, "content", None) or ""
-                        reasoning_piece = getattr(delta, "reasoning_content", None) or ""
+                            content_piece = getattr(delta, "content", None) or ""
+                            reasoning_piece = getattr(delta, "reasoning_content", None) or ""
 
-                        if content_piece or reasoning_piece:
-                            now_ts = time.monotonic()
-                            if gen_start_ts is None:
-                                gen_start_ts = now_ts
-                                if active_model not in self._loaded_vram_models:
-                                    self._loaded_vram_models.add(active_model)
-                                    self.after(0, self._refresh_model_dropdown_labels)
+                            if content_piece or reasoning_piece:
+                                now_ts = time.monotonic()
+                                if gen_start_ts is None:
+                                    gen_start_ts = now_ts
+                                    if active_model not in self._loaded_vram_models:
+                                        self._loaded_vram_models.add(active_model)
+                                        self.sig.refreshModelLabels.emit()
 
-                            total_tokens += 1
-                            chunk_accumulated += content_piece
+                                total_tokens += 1
+                                chunk_accumulated += content_piece
 
-                            elapsed_so_far = max(now_ts - gen_start_ts, 0.05)
-                            live_speed = total_tokens / elapsed_so_far
+                                elapsed_so_far = max(now_ts - gen_start_ts, 0.05)
+                                live_speed = total_tokens / elapsed_so_far
 
-                            in_think = bool(reasoning_piece and not content_piece) or (
-                                ("<think>" in chunk_accumulated or "<thought>" in chunk_accumulated)
-                                and not ("</think>" in chunk_accumulated or "</thought>" in chunk_accumulated)
-                            )
-                            if in_think:
-                                phase_lbl = f"{self._tr('thinking')} ({live_speed:.0f} tok/s)"
-                                self.after(0, lambda p=phase_lbl: self._update_status_anim_phase(p, "#a855f7", "#a855f7"))
-                            else:
-                                phase_lbl = f"{self._tr('typing')} ({live_speed:.0f} tok/s)"
-                                self.after(0, lambda p=phase_lbl: self._update_status_anim_phase(p, "#3b82f6", "#3b82f6"))
-
-                            if detected_lang_final is None and idx == 0:
-                                lang_m = re.search(r"<lang>(.*?)</lang>", chunk_accumulated, flags=re.IGNORECASE | re.DOTALL)
-                                if lang_m:
-                                    raw_det = lang_m.group(1).strip()
-                                    detected_lang_final = self._normalize_lang_name(raw_det)
-                                    if detected_lang_final:
-                                        self.after(0, lambda d=detected_lang_final: self._apply_detected_language_ui(d))
-                                        if not self.is_auto_detect and src_mode.lower() != detected_lang_final.lower():
-                                            self._tw_mismatch_langs = (src_mode, detected_lang_final)
-                                            mismatch_banner, _ = self._build_mismatch_texts(src_mode, detected_lang_final)
-                                            self.after(0, lambda w=mismatch_banner: self._show_instant_mismatch_banner(current_task, w))
-
-                            live_clean = self._clean_output_text(chunk_accumulated, tgt_lang, src_text=text)
-                            if live_clean:
-                                full_preview = (completed_chunks_text + "\n\n" + live_clean).strip() if completed_chunks_text else live_clean
-                                self.after(
-                                    0,
-                                    lambda fp=full_preview, spd=live_speed, w=mismatch_banner: self._start_or_update_typewriter(
-                                        current_task, fp, is_dict_mode, plain_probe, w, spd, stream_finished=False
-                                    )
+                                in_think = bool(reasoning_piece and not content_piece) or (
+                                    ("<think>" in chunk_accumulated or "<thought>" in chunk_accumulated)
+                                    and not ("</think>" in chunk_accumulated or "</thought>" in chunk_accumulated)
                                 )
+                                if in_think:
+                                    self.sig.statusAnimPhase.emit(f"{self._tr('thinking')} ({live_speed:.0f} tok/s)", "#a855f7")
+                                else:
+                                    self.sig.statusAnimPhase.emit(f"{self._tr('typing')} ({live_speed:.0f} tok/s)", "#3b82f6")
+
+                                if detected_lang_final is None and idx == 0:
+                                    lang_m = re.search(r"<lang>\s*([^<\n]{1,40}?)\s*</?lang>", chunk_accumulated, flags=re.IGNORECASE)
+                                    if lang_m:
+                                        raw_det = lang_m.group(1).strip()
+                                        detected_lang_final = self._normalize_lang_name(raw_det)
+                                        if detected_lang_final:
+                                            self.sig.detectedLangUpdated.emit(detected_lang_final)
+                                            if not self.auto_detect_mode and src_mode.lower() != detected_lang_final.lower():
+                                                self._tw_mismatch_langs = (src_mode, detected_lang_final)
+                                                mismatch_banner, _ = self._build_mismatch_texts(src_mode, detected_lang_final)
+                                                self.sig.mismatchBannerShown.emit(current_task, mismatch_banner)
+
+                                live_clean = self._clean_output_text(chunk_accumulated, tgt_lang, src_text=text)
+                                if live_clean:
+                                    full_preview = (completed_chunks_text + "\n\n" + live_clean).strip() if completed_chunks_text else live_clean
+                                    self.sig.typewriterUpdated.emit(
+                                        current_task, full_preview, is_dict_mode, plain_probe,
+                                        mismatch_banner, live_speed, False, "", "#22c55e"
+                                    )
+                    except Exception:
+                        if not chunk_accumulated:
+                            raise
 
                     cleaned_final = self._clean_output_text(chunk_accumulated, tgt_lang, src_text=text)
 
                     if is_dict_mode and self._task_id == current_task and self._is_dict_output_broken(cleaned_final, plain_probe, tgt_lang):
-                        self.after(0, lambda: self._update_status_anim_phase(self._tr("polishing"), "#a855f7", "#a855f7"))
-                        idiom_h = "[фразеологизмы и идиомы]" if self.ui_lang == "ru" else "[idioms & phrases]"
-                        native_h = "[исконные аналоги / значение]" if self.ui_lang == "ru" else "[native equivalents / meaning]"
+                        self.sig.statusAnimPhase.emit(self._tr("polishing"), "#a855f7")
                         retry_prompt = (
-                            f"Translate the word/phrase \"{plain_probe}\" into {tgt_lang}. "
-                            f"STRICTLY FORBIDDEN to leave \"{plain_probe}\" untranslated!\n"
-                            f"Output in this exact multi-line format:\n"
-                            f"<main>best translation in {tgt_lang}</main>\n"
-                            f"<dict>\n"
-                            f"[причастие / прилагательное] синонимы на {tgt_lang} (если есть)\n"
-                            f"{native_h} исконные аналоги на {tgt_lang} (если сленг/англицизм)\n"
-                            f"{idiom_h} фразеологизмы или идиомы на {tgt_lang} (если есть)\n"
-                            f"</dict>"
+                            f"Translate \"{plain_probe}\" into {tgt_lang}. "
+                            f"Output:\n<main>best translation in {tgt_lang}</main>\n<dict></dict>"
                         )
                         retry_res = self._create_chat_completion_universal(
                             active_model, "You are a strict bilingual dictionary.", retry_prompt, stream=False, temperature=0.1
@@ -4924,25 +5219,23 @@ class LLMTranslateApp(ctk.CTk):
                             if not self._is_dict_output_broken(cand_retry, plain_probe, tgt_lang):
                                 cleaned_final = cand_retry
 
-                    if not is_dict_mode and self._task_id == current_task:
+                    if not is_dict_mode and not has_img and self._task_id == current_task:
                         raw_chunk_src = re.sub(r"^.*?<source_text>\s*", "", payload, flags=re.DOTALL).replace("</source_text>", "").strip()
-                        corrupted = self._find_corrupted_words(cleaned_final, raw_chunk_src, tgt_lang)
-                        if 1 <= len(corrupted) <= 12:
-                            self.after(0, lambda: self._update_status_anim_phase(self._tr("polishing"), "#a855f7", "#a855f7"))
-                            fix_sys = (
-                                f"В переводе обнаружены непереведенные слова или склейки: {', '.join(corrupted)}.\n"
-                                f"Замени их в тексте перевода на чистый, литературный язык ({tgt_lang}) в точном соответствии с оригиналом, "
-                                f"сохранив все спецсимволы форматирования (**жирный**, *курсив*, `монолит`). ЗАПРЕЩЕНО писать транслит в скобках.\n"
-                                f"Выдай ТОЛЬКО готовый исправленный текст перевода."
+                        unchanged_echo = (
+                            not cleaned_final
+                            or cleaned_final.strip().lower() == raw_chunk_src.strip().lower()
+                            or (tgt_lang in CYRILLIC_LANGUAGES and not RE_CYRILLIC_CHARS.search(cleaned_final) and len(raw_chunk_src) > 3)
+                        )
+                        if unchanged_echo:
+                            self.sig.statusAnimPhase.emit(self._tr("polishing"), "#a855f7")
+                            direct_sys = f"Translate the user's text accurately into {tgt_lang}. Output ONLY the translation."
+                            direct_res = self._create_chat_completion_universal(
+                                active_model, direct_sys, raw_chunk_src, stream=False, temperature=0.1
                             )
-                            fix_user = f"Оригинал:\n{raw_chunk_src}\n\nПеревод для отполировки:\n{cleaned_final}"
-                            fix_res = self._create_chat_completion_universal(
-                                active_model, fix_sys, fix_user, stream=False, temperature=0.0
-                            )
-                            if fix_res and fix_res.choices and fix_res.choices[0].message.content:
-                                candidate = self._clean_output_text(fix_res.choices[0].message.content, tgt_lang, src_text=text)
-                                if len(self._find_corrupted_words(candidate, raw_chunk_src, tgt_lang)) < len(corrupted):
-                                    cleaned_final = candidate
+                            if direct_res and direct_res.choices and direct_res.choices[0].message.content:
+                                cand_direct = self._clean_output_text(direct_res.choices[0].message.content, tgt_lang, src_text=text)
+                                if cand_direct:
+                                    cleaned_final = cand_direct
 
                     completed_chunks_text = (completed_chunks_text + "\n\n" + cleaned_final).strip() if completed_chunks_text else cleaned_final
 
@@ -4956,24 +5249,28 @@ class LLMTranslateApp(ctk.CTk):
                         final_msg = f"{self._tr('done')} ({speed:.0f} tok/s)" if speed > 1 else self._tr("done")
                         final_col = "#22c55e"
 
-                    self.after(
-                        0,
-                        lambda c=completed_chunks_text, spd=speed, w=mismatch_banner, fm=final_msg, fc=final_col: self._start_or_update_typewriter(
-                            current_task, c, is_dict_mode, plain_probe, w, spd, stream_finished=True, final_msg=fm, final_color=fc
-                        )
+                    self.sig.typewriterUpdated.emit(
+                        current_task, completed_chunks_text, is_dict_mode, plain_probe,
+                        mismatch_banner, speed, True, final_msg, final_col
                     )
 
             except Exception as e:
                 if self._task_id != current_task:
                     return
+                if completed_chunks_text:
+                    self.sig.typewriterUpdated.emit(
+                        current_task, completed_chunks_text, is_dict_mode, plain_probe,
+                        "", 25.0, True, self._tr("done"), "#22c55e"
+                    )
+                    return
                 err_msg = str(e)
                 err_low = err_msg.lower()
                 if any(k in err_low for k in ("connection", "refused", "connecterror", "timed out", "unreachable")):
                     self._is_online = False
-                    self.after(0, self._sync_server_button_visibility)
-                    self.after(0, self._sync_vram_button_visibility)
-                self.after(0, lambda: self._render_phased_output(f"{self._tr('api_err')}:\n{err_msg}", [], False))
-                self.after(0, lambda: self._stop_status_anim(self._tr("conn_err"), "#ef4444", 0.0))
+                    QTimer.singleShot(0, self._sync_server_button_visibility)
+                    QTimer.singleShot(0, self._sync_vram_button_visibility)
+                self.sig.renderDirectOutput.emit(f"{self._tr('api_err')}:\n{err_msg}")
+                self.sig.statusAnimStop.emit(self._tr("conn_err"), "#ef4444", 0.0)
             finally:
                 if local_stream is not None:
                     try:
@@ -4983,30 +5280,25 @@ class LLMTranslateApp(ctk.CTk):
                 if self._task_id == current_task:
                     with self._stream_lock:
                         self._active_stream = None
-                    self.after(0, lambda: self.btn_go.configure(state="normal"))
-                    self.after(0, lambda: self.btn_stop.configure(state="disabled"))
+                    self.sig.resetGenerationButtons.emit()
 
         threading.Thread(target=ai_worker, daemon=True).start()
 
-    def on_closing(self):
+    def closeEvent(self, event):
         self._save_config()
-        self._close_all_dropdowns()
         self._abort_active_stream()
         self.stop_tts()
         if self._loaded_vram_models:
-            try:
-                self._set_status_label(self._tr("vram_exit"), "#eab308")
-                self.update_idletasks()
-            except Exception:
-                pass
+            self._set_status_raw(self._tr("vram_exit"), "#eab308")
+            QApplication.processEvents()
             self._verified_unload_all_vram(timeout_per_step=5)
-        self.destroy()
+        event.accept()
         os._exit(0)
 
 
 if __name__ == "__main__":
-    app = LLMTranslateApp()
-    try:
-        app.mainloop()
-    except KeyboardInterrupt:
-        app.on_closing()
+    app = QApplication(sys.argv)
+    app.setStyle("Fusion")
+    win = LLMTranslateWindow()
+    win.show()
+    sys.exit(app.exec())
