@@ -71,7 +71,7 @@
 ## ⚡ Быстрый старт (Windows `.exe`)
 
 1. Скачайте `LLMTranslate.exe` из раздела **[Releases](../../releases)**.
-2. Установите **[LM Studio](https://lmstudio.ai)**, добавьте `lms` в `PATH` (см. выше) и скачайте рекомендуемую модель из таблицы (например, `gemma-2-9b-it` в квантовании `Q4_K_M` или `Q5_K_M`).
+2. Установите **[LM Studio](https://lmstudio.ai)**, добавьте `lms` в `PATH` (см. выше) и скачайте рекомендуемую модель из таблицы (например, `gemma-2-9b-it` или `gpt-oss-20b` в квантовании `Q4_K_M` или `Q5_K_M`).
 3. Запустите `LLMTranslate.exe`. Если локальный сервер LM Studio ещё не активен, программа поднимет его сама или предложит нажать кнопку **«Сервер»**.
 
 ---
@@ -162,12 +162,11 @@ python llm_trans_latest_11.py
 ### Сборка автономного исполняемого файла (PyInstaller)
 ```bash
 # Windows (один .exe без лишних папок)
-pyinstaller --noconfirm --onefile --windowed --name "LLMTranslate" --icon "logo.ico" llm_trans_latest_11.py
+pyinstaller --noconfirm --onefile --windowed --name "LLMTranslate" --add-data "icons;icons" --icon "logo.ico" llm_trans_latest.py
 
 # Linux / macOS
-pyinstaller --noconfirm --onefile --windowed --name "LLMTranslate" llm_trans_latest_11.py
+pyinstaller --noconfirm --onefile --windowed --name "LLMTranslate" --add-data "icons:icons" llm_trans_latest.py
 ```
-*(Чтобы вшить пользовательскую папку `icons` прямо внутрь `.exe`, добавьте флаг `--add-data "icons;icons"` на Windows или `--add-data "icons:icons"` на Linux/macOS).*
 
 ---
 
@@ -208,4 +207,4 @@ pyinstaller --noconfirm --onefile --windowed --name "LLMTranslate" llm_trans_lat
 
 Проект распространяется под свободной лицензией **GNU General Public License v3.0 (GPLv3)**.
 
-Вы имеете право свободно использовать, изменять и распространять исходный код и производные программы при условии сохранения открытости кода под той же лицензией GPL v3. Полный текст лицензии доступен в файле [LICENSE](LICENSE).
+Вы имеете право свободно использовать, изменять и распространять исходный код и производные программы при условии сохранения открытости кода под той же лицензией GPL v3. Ну еще хорошо бы было, если вы бы отметили оригинального автора :p . Полный текст лицензии доступен в файле [LICENSE](LICENSE).
