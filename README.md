@@ -146,7 +146,7 @@ pip install PySide6 openai pyperclip
 
 ### 2. Запуск
 ```bash
-python llm_trans_latest_11.py
+python llm_trans_latest.py
 ```
 
 ---
