@@ -71,7 +71,7 @@ For maximum token generation speed, the model and its context (`KV cache`) must 
 ## ⚡ Quick Start (Windows `.exe`)
 
 1. Download `LLMTranslate.exe` from **[Releases](../../releases)**.
-2. Install **[LM Studio](https://lmstudio.ai)**, add `lms` to `PATH` (see above), and download a recommended model from the table (e.g., `gemma-2-9b-it` in `Q4_K_M` or `Q5_K_M`).
+2. Install **[LM Studio](https://lmstudio.ai)**, add `lms` to `PATH` (see above), and download a recommended model from the table (e.g., `gemma-2-9b-it` or `gpt-oss-20b` in `Q4_K_M` or `Q5_K_M`).
 3. Launch `LLMTranslate.exe`. If the local LM Studio server isn't running yet, the app will boot it automatically or let you start it via the **Server** button.
 
 ---
@@ -146,7 +146,7 @@ pip install PySide6 openai pyperclip
 
 ### 2. Run
 ```bash
-python llm_trans_latest_11.py
+python llm_trans_latest.py
 ```
 
 ---
@@ -162,10 +162,10 @@ If running from source and you want to use **custom button icons or flags**:
 ### Building a Standalone Executable (PyInstaller)
 ```bash
 # Windows (clean single .exe)
-pyinstaller --noconfirm --onefile --windowed --name "LLMTranslate" --icon "logo.ico" llm_trans_latest_11.py
+pyinstaller --noconfirm --onefile --windowed --name "LLMTranslate" --icon "logo.ico" --add-data "icons;icons" llm_trans_latest.py
 
 # Linux / macOS
-pyinstaller --noconfirm --onefile --windowed --name "LLMTranslate" llm_trans_latest_11.py
+pyinstaller --noconfirm --onefile --windowed --name "LLMTranslate" --add-data "icons:icons" llm_trans_latest.py
 ```
 *(To bundle custom `icons/` directly inside the executable, add `--add-data "icons;icons"` on Windows or `--add-data "icons:icons"` on Linux/macOS).*
 
