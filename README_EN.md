@@ -19,7 +19,7 @@
 <br/>
 
 <p align="center">
-  <img src="preview.png" alt="LLM Translate Interface" width="900" style="border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.5);"/>
+  <img src="preview_EN.png" alt="LLM Translate Interface" width="900" style="border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.5);"/>
 </p>
 
 </div>
