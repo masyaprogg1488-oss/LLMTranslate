@@ -16,7 +16,6 @@ import difflib
 import shutil
 import json
 import re
-import html
 import math
 
 try:
@@ -31,14 +30,15 @@ from PySide6.QtCore import (
     QPropertyAnimation, QVariantAnimation, QEasingCurve
 )
 from PySide6.QtGui import (
-    QIcon, QPixmap, QImage, QPainter, QColor, QPen, QBrush, QFont, QFontMetrics,
-    QTextCursor, QTextCharFormat, QSyntaxHighlighter, QPainterPath
+    QIcon, QPixmap, QImage, QImageReader, QPainter, QColor, QPen, QBrush, QFont, QFontMetrics,
+    QTextCursor, QTextCharFormat, QTextBlockFormat, QSyntaxHighlighter, QPainterPath,
+    QShortcut, QKeySequence
 )
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QPushButton, QLineEdit, QTextEdit, QPlainTextEdit, QAbstractButton,
     QProgressBar, QFrame, QListWidget, QListWidgetItem, QFileDialog, QMenu,
-    QSizePolicy, QAbstractItemView, QGraphicsOpacityEffect
+    QSizePolicy, QAbstractItemView, QGraphicsOpacityEffect, QStyledItemDelegate, QStyle
 )
 
 IS_WIN = sys.platform == "win32"
@@ -147,7 +147,11 @@ THEME = dict(THEME_PALETTES["dark"])
 LM_HOST, LM_PORT = "127.0.0.1", 1234
 LOADED_PREFIX = "✓ "
 MODEL_SIZE_SEP = "  •  "
-SCALE_OPTIONS = [75, 90, 100, 110, 125, 150]
+MODEL_QUANT_SEP = "  ·  "
+SCALE_OPTIONS = [75, 90, 100, 110, 125, 150, 175, 200]
+MAX_INPUT_CHARS = 100000
+MAX_IMAGE_FILE_BYTES = 25 * 1024 * 1024
+MAX_IMAGE_SOURCE_DIM = 8192
 
 if IS_FROZEN:
     SCRIPT_DIR = os.path.dirname(os.path.abspath(sys.executable))
@@ -188,6 +192,7 @@ CDN_UI_ICON_NAMES = {
     "vram_clean": "trash-2",
     "settings": "settings",
     "vision": "eye",
+    "reasoning": "sparkles",
 }
 
 UI_STRINGS = {
@@ -228,6 +233,12 @@ UI_STRINGS = {
         "settings_scale": "Масштаб интерфейса",
         "settings_lang": "Язык интерфейса",
         "server_btn": "Сервер",
+        "copy_btn": "Копировать",
+        "tip_copy": "Копировать чистый перевод (Ctrl+Shift+C)",
+        "paste_btn": "Вставить",
+        "pasted": "✓ Вставлено",
+        "tip_paste": "Вставить текст или картинку из буфера (Ctrl+V)",
+        "paste_empty": "Буфер обмена пуст",
         "instant_btn": "⚡ Показать сразу",
         "connecting": "Подключение...",
         "ready": "● Готов",
@@ -279,7 +290,7 @@ UI_STRINGS = {
         "ctx_copy_sel": "Копировать выделенное (Ctrl+C)",
         "ctx_copy_all": "Копировать весь перевод",
         "warn_prefix": "⚠ Неверный язык:",
-        "mismatch_warn": "⚠ Неверный язык: выбран «{src}», но это «{det}»! (Перевод с «{det}»):",
+        "mismatch_warn": "⚠ Неверный язык: выбран «{src}», но это «{det}»! (переведено с языка: {det}):",
         "mismatch_status": "⚠ Это {det}, а не {src}!"
     },
     "en": {
@@ -319,6 +330,12 @@ UI_STRINGS = {
         "settings_scale": "UI scale",
         "settings_lang": "Interface language",
         "server_btn": "Server",
+        "copy_btn": "Copy",
+        "tip_copy": "Copy clean translation (Ctrl+Shift+C)",
+        "paste_btn": "Paste",
+        "pasted": "✓ Pasted",
+        "tip_paste": "Paste text or image from clipboard (Ctrl+V)",
+        "paste_empty": "Clipboard is empty",
         "instant_btn": "⚡ Show instantly",
         "connecting": "Connecting...",
         "ready": "● Ready",
@@ -828,13 +845,64 @@ def resource_path(relative_path):
 
 
 def find_user_asset(subpath_no_ext):
-    """Ищет пользовательскую картинку в icons/<subpath>.(png|svg) рядом со скриптом или внутри PyInstaller bundle."""
+    if not subpath_no_ext or ".." in subpath_no_ext or subpath_no_ext.startswith(("/", "\\")):
+        return None
+    base_icons = os.path.abspath(resource_path("icons"))
     for ext in (".png", ".svg"):
         rel = os.path.join("icons", subpath_no_ext + ext)
-        p = resource_path(rel)
-        if os.path.isfile(p) and os.path.getsize(p) > 32:
+        p = os.path.abspath(resource_path(rel))
+        if not p.startswith(base_icons + os.sep):
+            continue
+        if os.path.isfile(p) and 32 < os.path.getsize(p) <= 2 * 1024 * 1024:
             return p
     return None
+
+
+def load_safe_qimage(path):
+    if not path or not os.path.isfile(path):
+        return QImage()
+    try:
+        if os.path.getsize(path) > MAX_IMAGE_FILE_BYTES:
+            return QImage()
+        QImageReader.setAllocationLimit(64)
+        reader = QImageReader(path)
+        reader.setAutoTransform(True)
+        sz = reader.size()
+        if sz.isValid() and (sz.width() > MAX_IMAGE_SOURCE_DIM or sz.height() > MAX_IMAGE_SOURCE_DIM or sz.width() <= 0 or sz.height() <= 0):
+            return QImage()
+        img = reader.read()
+        return img if not img.isNull() else QImage()
+    except Exception:
+        return QImage()
+
+
+RE_QUANT_PATTERN = re.compile(
+    r"(?:^|[-_./@])("
+    r"(?:I?Q[1-8]_(?:K_(?:S|M|L|XS|XXS)|[01]|NL|S|M|L))"
+    r"|(?:F(?:P)?(?:16|32|8))"
+    r"|(?:BF16)"
+    r"|(?:[2-8]bit)"
+    r"|(?:INT[48])"
+    r")(?:$|[-_./@])",
+    flags=re.IGNORECASE
+)
+
+
+def extract_model_quant(raw_quant_meta, model_key="", rel_path=""):
+    if isinstance(raw_quant_meta, dict):
+        q_name = raw_quant_meta.get("name") or raw_quant_meta.get("quant")
+        if q_name:
+            return str(q_name).strip().upper()
+    elif isinstance(raw_quant_meta, str) and raw_quant_meta.strip():
+        return raw_quant_meta.strip().upper()
+
+    for source in (rel_path, model_key):
+        if not source:
+            continue
+        m = RE_QUANT_PATTERN.search(source)
+        if m:
+            return m.group(1).upper()
+    return ""
 
 
 def strip_loaded_prefix(val):
@@ -843,8 +911,9 @@ def strip_loaded_prefix(val):
     s = val.strip()
     if s.startswith(LOADED_PREFIX):
         s = s[len(LOADED_PREFIX):].strip()
-    if MODEL_SIZE_SEP in s:
-        s = s.split(MODEL_SIZE_SEP, 1)[0].strip()
+    for sep in (MODEL_SIZE_SEP, MODEL_QUANT_SEP):
+        if sep in s:
+            s = s.split(sep, 1)[0].strip()
     return s
 
 
@@ -988,18 +1057,27 @@ class AnimatedToggleSwitch(QAbstractButton):
         self._anim_hover.start()
         super().leaveEvent(event)
 
+    def _sw_metrics(self):
+        fm = QFontMetrics(self.font())
+        sf = max(0.75, fm.height() / 16.0)
+        sw_w = round(34.0 * sf)
+        sw_h = round(18.0 * sf)
+        gap = round(9.0 * sf)
+        return sw_w, sw_h, gap
+
     def sizeHint(self):
         fm = QFontMetrics(self.font())
+        sw_w, sw_h, gap = self._sw_metrics()
         txt_w = fm.horizontalAdvance(self.text()) if self.text() else 0
-        h = max(22, fm.height() + 6)
-        w = 36 + (8 + txt_w if txt_w > 0 else 0) + 6
+        h = max(int(sw_h + 4), fm.height() + 6)
+        w = int(sw_w + 2 + (gap + txt_w if txt_w > 0 else 0) + 6)
         return QSize(w, h)
 
     def paintEvent(self, event):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
 
-        sw_w, sw_h = 34.0, 18.0
+        sw_w, sw_h, gap = self._sw_metrics()
         y_top = (self.height() - sw_h) / 2.0
         track_rect = QRectF(1.0, y_top, sw_w, sw_h)
 
@@ -1014,7 +1092,7 @@ class AnimatedToggleSwitch(QAbstractButton):
         p.setPen(QPen(border_col, 1.1))
         p.drawRoundedRect(track_rect, sw_h / 2.0, sw_h / 2.0)
 
-        pad = 2.5
+        pad = max(2.0, sw_h * 0.14)
         d = sw_h - pad * 2.0
         x_min = track_rect.left() + pad
         x_max = track_rect.right() - pad - d
@@ -1031,7 +1109,7 @@ class AnimatedToggleSwitch(QAbstractButton):
             txt_col = blend_colors(THEME["text_main"], THEME["border_focus"], self._hover_level * 0.25)
             p.setPen(txt_col)
             p.setFont(self.font())
-            txt_rect = QRectF(sw_w + 9.0, 0.0, self.width() - sw_w - 9.0, float(self.height()))
+            txt_rect = QRectF(sw_w + gap, 0.0, self.width() - sw_w - gap, float(self.height()))
             p.drawText(txt_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, self.text())
 
         p.end()
@@ -1101,9 +1179,10 @@ class AnimatedPillButton(QPushButton):
         brd_idle = blend_colors(THEME["border"], THEME["border_focus"], self._hover_val)
         brd = blend_colors(brd_idle.name(), THEME["bg_accent"], self._active_val)
 
+        r_pill = 6.0 * (self.height() / 26.0)
         p.setBrush(bg)
         p.setPen(QPen(brd, 1.0))
-        p.drawRoundedRect(rect, 6.0, 6.0)
+        p.drawRoundedRect(rect, r_pill, r_pill)
 
         txt_col = blend_colors(THEME["text_main"], "#ffffff", self._active_val)
         p.setPen(txt_col)
@@ -1210,14 +1289,52 @@ def create_vector_qicon(name, color_hex="#f1f5f9", size=20):
     elif name == "vision":
         p.drawEllipse(QRectF(s * 0.20, s * 0.32, s * 0.60, s * 0.36))
         p.drawEllipse(QRectF(s * 0.40, s * 0.40, s * 0.20, s * 0.20))
+    elif name == "reasoning":
+        cx, cy = s * 0.46, s * 0.50
+        r_out, r_in = s * 0.30, s * 0.09
+        star = QPainterPath()
+        star.moveTo(cx, cy - r_out)
+        star.quadTo(cx, cy, cx + r_out, cy)
+        star.quadTo(cx, cy, cx, cy + r_out)
+        star.quadTo(cx, cy, cx - r_out, cy)
+        star.quadTo(cx, cy, cx, cy - r_out)
+        p.setBrush(QBrush(QColor(color_hex)))
+        p.drawPath(star)
+        sx, sy, sr = s * 0.76, s * 0.24, s * 0.11
+        p.drawLine(QPoint(int(sx), int(sy - sr)), QPoint(int(sx), int(sy + sr)))
+        p.drawLine(QPoint(int(sx - sr), int(sy)), QPoint(int(sx + sr), int(sy)))
 
     p.end()
     return QIcon(pm)
 
+def create_combined_qicon(icon_names, color_hex="#a855f7", size=18):
+    valid = [n for n in icon_names if n]
+    if not valid:
+        return None
+    if len(valid) == 1:
+        return create_vector_qicon(valid[0], color_hex, size)
+
+    gap = max(2, int(round(size * 0.16)))
+    total_w = size * len(valid) + gap * (len(valid) - 1)
+    dpr = 2
+    pm = QPixmap(total_w * dpr, size * dpr)
+    pm.setDevicePixelRatio(dpr)
+    pm.fill(Qt.GlobalColor.transparent)
+
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+    for idx, name in enumerate(valid):
+        sub_ico = create_vector_qicon(name, color_hex, size)
+        x = idx * (size + gap)
+        sub_ico.paint(p, x, 0, size, size)
+    p.end()
+    return QIcon(pm)
 
 def _apply_rounded_flag_mask(src_pm, w=22, h=15):
     dpr = 2.0
     pw, ph = int(w * dpr), int(h * dpr)
+    rad = 2.5 * (h / 15.0)
     out = QPixmap(pw, ph)
     out.setDevicePixelRatio(dpr)
     out.fill(Qt.GlobalColor.transparent)
@@ -1227,14 +1344,14 @@ def _apply_rounded_flag_mask(src_pm, w=22, h=15):
     p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
 
     clip = QPainterPath()
-    clip.addRoundedRect(QRectF(0.0, 0.0, float(w), float(h)), 2.5, 2.5)
+    clip.addRoundedRect(QRectF(0.0, 0.0, float(w), float(h)), rad, rad)
     p.setClipPath(clip)
     p.drawPixmap(QRect(0, 0, w, h), src_pm)
 
     p.setClipping(False)
     p.setBrush(Qt.BrushStyle.NoBrush)
     p.setPen(QPen(QColor(255, 255, 255, 50), 1.0))
-    p.drawRoundedRect(QRectF(0.5, 0.5, w - 1.0, h - 1.0), 2.5, 2.5)
+    p.drawRoundedRect(QRectF(0.5, 0.5, w - 1.0, h - 1.0), rad, rad)
     p.end()
     return out
 
@@ -1256,6 +1373,7 @@ def create_flag_pixmap(iso_code, w=22, h=15):
 
     dpr = 2.0
     pw, ph = int(w * dpr), int(h * dpr)
+    rad = 2.5 * (h / 15.0)
     pm = QPixmap(pw, ph)
     pm.setDevicePixelRatio(dpr)
     pm.fill(Qt.GlobalColor.transparent)
@@ -1264,28 +1382,26 @@ def create_flag_pixmap(iso_code, w=22, h=15):
     p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
 
     clip = QPainterPath()
-    clip.addRoundedRect(QRectF(0.0, 0.0, float(w), float(h)), 2.5, 2.5)
+    clip.addRoundedRect(QRectF(0.0, 0.0, float(w), float(h)), rad, rad)
     p.setClipPath(clip)
 
-    if iso_code == "badge_ai":
-        p.fillRect(0, 0, w, h, QColor("#2e1065"))
-        p.setPen(QColor("#e9d5ff"))
-        p.setFont(QFont(UI_FONT, 7, QFont.Weight.Bold))
-        p.drawText(QRectF(0, 0, w, h), Qt.AlignmentFlag.AlignCenter, "AI")
+    if iso_code in ("badge_ai", "badge_fast"):
         p.setClipping(False)
-        p.setPen(QPen(QColor("#a855f7"), 1.0))
-        p.drawRoundedRect(QRectF(0.5, 0.5, w - 1.0, h - 1.0), 2.5, 2.5)
-        p.end()
-        return pm
-
-    if iso_code == "badge_fast":
-        p.fillRect(0, 0, w, h, QColor("#172554"))
-        p.setPen(QColor("#bfdbfe"))
-        p.setFont(QFont(UI_FONT, 6, QFont.Weight.Bold))
-        p.drawText(QRectF(0, 0, w, h), Qt.AlignmentFlag.AlignCenter, "ABC")
-        p.setClipping(False)
-        p.setPen(QPen(QColor("#3b82f6"), 1.0))
-        p.drawRoundedRect(QRectF(0.5, 0.5, w - 1.0, h - 1.0), 2.5, 2.5)
+        badge_rect = QRectF(0.5, 0.5, w - 1.0, h - 1.5)
+        if iso_code == "badge_ai":
+            p.setBrush(QColor("#2e1065"))
+            p.setPen(QPen(QColor("#a855f7"), 1.0))
+            p.drawRoundedRect(badge_rect, rad, rad)
+            p.setPen(QColor("#e9d5ff"))
+            p.setFont(QFont(UI_FONT, max(6, int(round(7 * (h / 15.0)))), QFont.Weight.Bold))
+            p.drawText(badge_rect.adjusted(0, -0.5, 0, -0.5), Qt.AlignmentFlag.AlignCenter, "AI")
+        else:
+            p.setBrush(QColor("#172554"))
+            p.setPen(QPen(QColor("#3b82f6"), 1.0))
+            p.drawRoundedRect(badge_rect, rad, rad)
+            p.setPen(QColor("#bfdbfe"))
+            p.setFont(QFont(UI_FONT, max(5, int(round(6 * (h / 15.0)))), QFont.Weight.Bold))
+            p.drawText(badge_rect.adjusted(0, -0.5, 0, -0.5), Qt.AlignmentFlag.AlignCenter, "ABC")
         p.end()
         return pm
 
@@ -1531,13 +1647,15 @@ def create_flag_pixmap(iso_code, w=22, h=15):
     p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
     p.setBrush(Qt.BrushStyle.NoBrush)
     p.setPen(QPen(QColor(255, 255, 255, 50), 1.0))
-    p.drawRoundedRect(QRectF(0.5, 0.5, w - 1.0, h - 1.0), 2.5, 2.5)
+    p.drawRoundedRect(QRectF(0.5, 0.5, w - 1.0, h - 1.0), rad, rad)
     p.end()
     return pm
 
 
-def _fetch_first_working_url(urls, timeout=3.5):
+def _fetch_first_working_url(urls, timeout=3.5, max_bytes=2 * 1024 * 1024):
     for u in urls:
+        if not isinstance(u, str) or not u.startswith("https://"):
+            continue
         try:
             req = urllib.request.Request(
                 u,
@@ -1547,8 +1665,8 @@ def _fetch_first_working_url(urls, timeout=3.5):
                 }
             )
             with urllib.request.urlopen(req, timeout=timeout) as resp:
-                data = resp.read()
-            if data and len(data) > 64:
+                data = resp.read(max_bytes + 1)
+            if data and 64 < len(data) <= max_bytes:
                 return data
         except Exception:
             continue
@@ -1646,6 +1764,111 @@ class MarkdownInputHighlighter(QSyntaxHighlighter):
                 self.setFormat(en - 1, 1, fmt_dim)
 
 
+class SelectorItemDelegate(QStyledItemDelegate):
+    def __init__(self, selector):
+        super().__init__(selector)
+        self.selector = selector
+
+    def paint(self, painter, option, index):
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+        rect = option.rect
+        is_sel = bool(option.state & QStyle.StateFlag.State_Selected)
+        is_hov = bool(option.state & QStyle.StateFlag.State_MouseOver)
+
+        if is_sel:
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(THEME["bg_accent"]))
+            painter.drawRoundedRect(QRectF(rect).adjusted(1, 1, -1, -1), 4.0 * self.selector._scale_factor, 4.0 * self.selector._scale_factor)
+        elif is_hov:
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(THEME["bg_hover"]))
+            painter.drawRoundedRect(QRectF(rect).adjusted(1, 1, -1, -1), 4.0 * self.selector._scale_factor, 4.0 * self.selector._scale_factor)
+
+        pad_x = max(6, int(round(8 * self.selector._scale_factor)))
+        x = rect.left() + pad_x
+        right_limit = rect.right() - pad_x
+
+        ico = index.data(Qt.ItemDataRole.DecorationRole)
+        if isinstance(ico, QIcon) and not ico.isNull():
+            ih = self.selector._icon_size.height()
+            actual = ico.actualSize(QSize(ih * 3, ih))
+            iw = actual.width() if actual.width() > 0 else ih
+            iy = rect.top() + (rect.height() - ih) // 2
+            ico.paint(painter, x, iy, iw, ih)
+            x += iw + max(5, int(round(6 * self.selector._scale_factor)))
+
+        raw_text = index.data(Qt.ItemDataRole.DisplayRole) or ""
+        is_disabled = not (index.flags() & Qt.ItemFlag.ItemIsEnabled)
+
+        base_font = self.selector.list_widget.font()
+        painter.setFont(base_font)
+        fm = QFontMetrics(base_font)
+
+        if raw_text.startswith(LOADED_PREFIX):
+            chk_font = QFont(base_font)
+            chk_font.setBold(True)
+            painter.setFont(chk_font)
+            chk_fm = QFontMetrics(chk_font)
+            chk_w = chk_fm.horizontalAdvance(LOADED_PREFIX)
+            painter.setPen(QColor("#ffffff" if is_sel else "#22c55e"))
+            painter.drawText(QRect(x, rect.top(), chk_w + 2, rect.height()), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, LOADED_PREFIX)
+            x += chk_w
+            raw_text = raw_text[len(LOADED_PREFIX):]
+            painter.setFont(base_font)
+
+        quant_part = ""
+        if MODEL_QUANT_SEP in raw_text:
+            raw_text, q_raw = raw_text.split(MODEL_QUANT_SEP, 1)
+            quant_part = f"  {q_raw.strip()}"
+
+        size_part = ""
+        if MODEL_SIZE_SEP in raw_text:
+            main_part, s_raw = raw_text.split(MODEL_SIZE_SEP, 1)
+            size_part = f"{MODEL_SIZE_SEP}{s_raw.strip()}"
+        else:
+            main_part = raw_text
+
+        quant_w = 0
+        quant_font = QFont(base_font)
+        if quant_part:
+            quant_font.setPointSize(max(7, base_font.pointSize() - 2))
+            q_fm = QFontMetrics(quant_font)
+            quant_w = q_fm.horizontalAdvance(quant_part) + 2
+
+        size_w = fm.horizontalAdvance(size_part) if size_part else 0
+        avail_for_main = max(24, right_limit - x - size_w - quant_w)
+        elided_main = fm.elidedText(main_part, Qt.TextElideMode.ElideRight, avail_for_main)
+        main_w = fm.horizontalAdvance(elided_main)
+
+        if is_disabled:
+            main_col = QColor(THEME["text_dim"])
+        elif is_sel:
+            main_col = QColor("#ffffff")
+        else:
+            main_col = QColor(THEME["text_main"])
+
+        painter.setPen(main_col)
+        painter.drawText(QRect(x, rect.top(), main_w + 2, rect.height()), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, elided_main)
+        x += main_w
+
+        if size_part and x < right_limit - quant_w:
+            muted_col = QColor("#e2e8f0" if is_sel else THEME["text_muted"])
+            painter.setPen(muted_col)
+            painter.drawText(QRect(x, rect.top(), size_w + 2, rect.height()), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, size_part)
+            x += size_w
+
+        if quant_part and x < right_limit:
+            painter.setFont(quant_font)
+            q_col = QColor("#ffffff" if is_sel else THEME["text_muted"])
+            q_col.setAlpha(185 if is_sel else 135)
+            painter.setPen(q_col)
+            painter.drawText(QRect(x, rect.top(), right_limit - x, rect.height()), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, quant_part)
+
+        painter.restore()
+
+
 class SearchableSelector(QFrame):
     selectionChanged = Signal(str)
 
@@ -1667,15 +1890,16 @@ class SearchableSelector(QFrame):
         self.icon_provider = icon_provider
         self.min_popup_width = min_popup_width
         self._is_editing = False
+        self._scale_factor = 1.0
         self._icon_size = QSize(22, 15)
 
         self.setFixedHeight(height)
         self.setObjectName("SelectorBox")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(8, 0, 4, 0)
-        layout.setSpacing(6)
+        self.box_layout = QHBoxLayout(self)
+        self.box_layout.setContentsMargins(8, 0, 4, 0)
+        self.box_layout.setSpacing(6)
 
         self.lbl_icon = QLabel()
         self.lbl_icon.setFixedSize(22, 16)
@@ -1683,23 +1907,28 @@ class SearchableSelector(QFrame):
         self.lbl_icon.setCursor(Qt.CursorShape.PointingHandCursor)
         if self.icon_provider is None:
             self.lbl_icon.hide()
-        layout.addWidget(self.lbl_icon)
+        self.box_layout.addWidget(self.lbl_icon)
 
         self.edit = QLineEdit()
         self.edit.setFrame(False)
         self.edit.setReadOnly(not self.editable)
         self.edit.setFont(QFont(UI_FONT, self.font_size, QFont.Weight.DemiBold))
-        self.edit.setText(default_value)
-        self.edit.setCursorPosition(0)
         self.edit.setCursor(Qt.CursorShape.PointingHandCursor)
-        layout.addWidget(self.edit, 1)
+        self.box_layout.addWidget(self.edit, 1)
+
+        self.lbl_quant = QLabel()
+        self.lbl_quant.setObjectName("QuantBadge")
+        self.lbl_quant.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.lbl_quant.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.lbl_quant.hide()
+        self.box_layout.addWidget(self.lbl_quant)
 
         self.btn_arrow = QPushButton("▾")
         self.btn_arrow.setFixedSize(24, height - 4)
         self.btn_arrow.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_arrow.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.btn_arrow.clicked.connect(self._toggle_popup)
-        layout.addWidget(self.btn_arrow)
+        self.box_layout.addWidget(self.btn_arrow)
 
         self.popup = QFrame(self.root)
         self.popup.setObjectName("SelectorPopup")
@@ -1720,6 +1949,8 @@ class SearchableSelector(QFrame):
         self.list_widget.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self.list_widget.setUniformItemSizes(True)
         self.list_widget.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.list_widget.setMouseTracking(True)
+        self.list_widget.setItemDelegate(SelectorItemDelegate(self))
         self.list_widget.setCursor(Qt.CursorShape.PointingHandCursor)
         self.list_widget.viewport().setCursor(Qt.CursorShape.PointingHandCursor)
         self.list_widget.itemClicked.connect(self._on_item_clicked)
@@ -1731,10 +1962,43 @@ class SearchableSelector(QFrame):
 
         self.installEventFilter(self)
         self.lbl_icon.installEventFilter(self)
+        self.lbl_quant.installEventFilter(self)
         self.edit.installEventFilter(self)
+        self._apply_display_text(default_value)
         self._update_icon()
 
+    def _clean_closed_label(self, val):
+        if not val:
+            return ""
+        s = val.strip()
+        for sep in (MODEL_SIZE_SEP, MODEL_QUANT_SEP):
+            if sep in s:
+                s = s.split(sep, 1)[0].strip()
+        return s
+
+    def _apply_display_text(self, val):
+        self.lbl_quant.hide()
+        if self._is_editing:
+            self.edit.setText(val)
+            self.edit.setToolTip(val)
+            return
+        display_raw = self._clean_closed_label(val)
+        avail_w = self.edit.width()
+        if avail_w <= 12:
+            avail_w = max(24, self.width() - self.btn_arrow.width() - (self.lbl_icon.width() + 6 if not self.lbl_icon.isHidden() else 0) - 18)
+        fm = QFontMetrics(self.edit.font())
+        elided = fm.elidedText(display_raw, Qt.TextElideMode.ElideRight, max(16, avail_w - 4))
+        self.edit.setText(elided)
+        self.edit.setCursorPosition(0)
+        self.edit.setToolTip(val)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if not self._is_editing:
+            self._apply_display_text(self.current_val)
+
     def apply_scale(self, scale_factor, base_h, base_font, base_min_popup=190):
+        self._scale_factor = scale_factor
         h = max(24, int(round(base_h * scale_factor)))
         fs = max(8, int(round(base_font * scale_factor)))
         iw = max(16, int(round(22 * scale_factor)))
@@ -1742,8 +2006,14 @@ class SearchableSelector(QFrame):
         self._icon_size = QSize(iw, ih)
         self.min_popup_width = max(72, int(round(base_min_popup * scale_factor)))
         self.setFixedHeight(h)
+        self.box_layout.setContentsMargins(
+            max(6, int(round(8 * scale_factor))), 0,
+            max(3, int(round(4 * scale_factor))), 0
+        )
+        self.box_layout.setSpacing(max(4, int(round(6 * scale_factor))))
         self.lbl_icon.setFixedSize(iw, ih + 1)
         self.edit.setFont(QFont(UI_FONT, fs, QFont.Weight.DemiBold))
+        self.lbl_quant.setFont(QFont(UI_FONT, max(7, fs - 2), QFont.Weight.Normal))
         self.btn_arrow.setFixedSize(max(20, int(round(24 * scale_factor))), max(20, h - 4))
         self.list_widget.setIconSize(self._icon_size)
         self.list_widget.setFont(QFont(UI_FONT, max(8, fs - 1)))
@@ -1752,7 +2022,7 @@ class SearchableSelector(QFrame):
     def eventFilter(self, obj, event):
         if not hasattr(self, "edit"):
             return super().eventFilter(obj, event)
-        if obj in (self, self.lbl_icon, self.edit):
+        if obj in (self, self.lbl_icon, self.lbl_quant, self.edit):
             if event.type() == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
                 if not self.popup.isVisible():
                     self._start_editing_and_open()
@@ -1787,7 +2057,11 @@ class SearchableSelector(QFrame):
             return
         ico = self.icon_provider(self.current_val)
         if ico is not None and not ico.isNull():
-            self.lbl_icon.setPixmap(ico.pixmap(self._icon_size))
+            ih = self._icon_size.height()
+            actual = ico.actualSize(QSize(ih * 3, ih))
+            iw = actual.width() if actual.width() > 0 else self._icon_size.width()
+            self.lbl_icon.setFixedSize(iw, ih + 1)
+            self.lbl_icon.setPixmap(ico.pixmap(QSize(iw, ih)))
             self.lbl_icon.show()
         else:
             self.lbl_icon.hide()
@@ -1797,6 +2071,7 @@ class SearchableSelector(QFrame):
             self.root._close_all_popups(except_widget=self)
         self._is_editing = True
         self._update_icon()
+        self.lbl_quant.hide()
         self.setProperty("focused", True)
         self.style().unpolish(self)
         self.style().polish(self)
@@ -1857,10 +2132,11 @@ class SearchableSelector(QFrame):
         if top_left.x() + box_w > self.root.width() - 8:
             box_w = max(90, self.root.width() - top_left.x() - 8)
 
-        row_h = max(24, self._icon_size.height() + 12)
+        row_h = max(24, self._icon_size.height() + int(round(12 * self._scale_factor)))
         count = max(1, self.list_widget.count())
-        desired_h = min(count * row_h + 6, 260)
-        gap = 4
+        max_pop_h = int(round(310 * self._scale_factor))
+        desired_h = min(count * row_h + 6, max_pop_h)
+        gap = max(3, int(round(4 * self._scale_factor)))
 
         space_below = self.root.height() - (top_left.y() + self.height()) - 8
         space_above = top_left.y() - 8
@@ -1878,7 +2154,7 @@ class SearchableSelector(QFrame):
 
     def open_popup(self, items, animate=True):
         self.list_widget.clear()
-        row_h = max(24, self._icon_size.height() + 12)
+        row_h = max(24, self._icon_size.height() + int(round(12 * self._scale_factor)))
         if not items:
             hint = self.root._tr("custom_lang_hint") if self.allow_custom else self.root._tr("no_matches")
             it = QListWidgetItem(hint)
@@ -1938,9 +2214,7 @@ class SearchableSelector(QFrame):
         self._anim_geom.stop()
         self.popup.hide()
         self._update_icon()
-        self.edit.setText(self.current_val)
-        self.edit.setCursorPosition(0)
-        self.edit.setToolTip(self.current_val)
+        self._apply_display_text(self.current_val)
         self.edit.clearFocus()
         self.selectionChanged.emit(self.current_val)
 
@@ -1949,9 +2223,7 @@ class SearchableSelector(QFrame):
         self._anim_geom.stop()
         self.popup.hide()
         self._update_icon()
-        self.edit.setText(self.current_val)
-        self.edit.setCursorPosition(0)
-        self.edit.setToolTip(self.current_val)
+        self._apply_display_text(self.current_val)
         self.edit.clearFocus()
 
     def _finish_editing_state(self):
@@ -1971,9 +2243,7 @@ class SearchableSelector(QFrame):
         self.current_val = val
         self._finish_editing_state()
         self._update_icon()
-        self.edit.setText(val)
-        self.edit.setCursorPosition(0)
-        self.edit.setToolTip(val)
+        self._apply_display_text(val)
 
 
 class InputTextEdit(QPlainTextEdit):
@@ -1996,7 +2266,7 @@ class InputTextEdit(QPlainTextEdit):
             for url in source.urls():
                 local = url.toLocalFile()
                 if local and os.path.isfile(local) and local.lower().endswith((".png", ".jpg", ".jpeg", ".webp", ".bmp")):
-                    qimg = QImage(local)
+                    qimg = load_safe_qimage(local)
                     if not qimg.isNull():
                         self.imagePasted.emit(qimg)
                         return
@@ -2027,6 +2297,7 @@ class LLMTranslateWindow(QMainWindow):
 
         self.sig = UISignals()
         self._connect_signals()
+        self._apply_app_icon()
 
         self.setWindowTitle("LLM TRANSLATE")
         self._apply_app_icon()
@@ -2080,7 +2351,9 @@ class LLMTranslateWindow(QMainWindow):
         self._tw_dict_sections = []
         self._tw_displayed_chars = 0.0
         self._tw_is_dict_mode = False
+        self._tw_is_short_query = False
         self._tw_word = ""
+        self._temp_status_restore = None
         self._tw_mismatch_warning = ""
         self._tw_mismatch_langs = None
         self._tw_tok_speed = 25.0
@@ -2113,9 +2386,30 @@ class LLMTranslateWindow(QMainWindow):
         self._reconnect_timer.timeout.connect(self._auto_reconnect_loop)
         self._reconnect_timer.start(5000)
 
+        self._temp_status_timer = QTimer(self)
+        self._temp_status_timer.setSingleShot(True)
+        self._temp_status_timer.timeout.connect(self._restore_temp_status)
+
+        self.centralWidget().setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         QApplication.instance().installEventFilter(self)
+        QShortcut(QKeySequence("Ctrl+Shift+C"), self, activated=self.copy_output)
+        QShortcut(QKeySequence("Ctrl+Shift+S"), self, activated=self.swap_languages)
+        QShortcut(QKeySequence(Qt.Key.Key_Escape), self, activated=self._handle_escape_key)
         self._start_background_cdn_assets_sync()
         self.fetch_models(auto_start_server=True)
+        QTimer.singleShot(0, self._clear_all_focus)
+
+    def _handle_escape_key(self):
+        if self.btn_stop.isVisible():
+            self.stop_translation()
+        elif self._is_speaking:
+            self.stop_tts(show_status=True)
+
+    def _clear_all_focus(self):
+        fw = QApplication.focusWidget()
+        if fw is not None and fw is not self.centralWidget():
+            fw.clearFocus()
+        self.centralWidget().setFocus(Qt.FocusReason.OtherFocusReason)
 
     @staticmethod
     def _set_btn_enabled_with_cursor(btn, enabled):
@@ -2230,7 +2524,7 @@ class LLMTranslateWindow(QMainWindow):
                 sc = int(cfg.get("ui_scale", 100))
                 if sc in SCALE_OPTIONS:
                     scale = sc
-                elif 75 <= sc <= 150:
+                elif 75 <= sc <= 200:
                     scale = min(SCALE_OPTIONS, key=lambda x: abs(x - sc))
             except Exception:
                 pass
@@ -2260,10 +2554,15 @@ class LLMTranslateWindow(QMainWindow):
         clean = strip_loaded_prefix(label_text)
         if not clean or clean in ALL_MODEL_PLACEHOLDERS:
             return None
+        icons = []
         if self._is_model_vision_capable(clean):
-            sz = max(14, int(round(18 * (self.ui_scale / 100.0))))
-            return create_vector_qicon("vision", THEME["vision_purple"], sz)
-        return None
+            icons.append("vision")
+        if self._is_model_reasoning_capable(clean):
+            icons.append("reasoning")
+        if not icons:
+            return None
+        sz = max(14, int(round(17 * (self.ui_scale / 100.0))))
+        return create_combined_qicon(icons, THEME["vision_purple"], sz)
 
     def _build_ui(self):
         central = QWidget()
@@ -2279,7 +2578,6 @@ class LLMTranslateWindow(QMainWindow):
         self.root_grid.setColumnStretch(2, 1)
         self.root_grid.setRowStretch(1, 1)
 
-        # Row 0: Language Selectors
         self.dd_src = SearchableSelector(
             self, self._get_localized_world_languages(), self._tr("auto_ai"),
             aliases=LANG_MAP, prefer_upwards=False, height=34,
@@ -2296,7 +2594,6 @@ class LLMTranslateWindow(QMainWindow):
         self.dd_tgt.selectionChanged.connect(self._on_tgt_lang_selected)
         self.root_grid.addWidget(self.dd_tgt, 0, 2)
 
-        # Row 1, Col 0: Input Panel
         in_box = QWidget()
         in_lay = QVBoxLayout(in_box)
         in_lay.setContentsMargins(0, 0, 0, 0)
@@ -2333,6 +2630,10 @@ class LLMTranslateWindow(QMainWindow):
 
         in_lay.addWidget(self.img_banner)
 
+        in_editor_wrap = QWidget()
+        in_grid = QGridLayout(in_editor_wrap)
+        in_grid.setContentsMargins(0, 0, 0, 0)
+
         self.t_in = InputTextEdit()
         self.t_in.setObjectName("EditorIn")
         self.t_in.setFont(QFont(UI_FONT, 12))
@@ -2342,11 +2643,28 @@ class LLMTranslateWindow(QMainWindow):
         self.t_in.submitRequested.connect(self._force_trigger)
         self.t_in.imagePasted.connect(self._attach_qimage)
         self.md_highlighter = MarkdownInputHighlighter(self.t_in.document())
-        in_lay.addWidget(self.t_in, 1)
+        in_grid.addWidget(self.t_in, 0, 0)
+
+        in_overlay = QWidget()
+        in_ov_lay = QHBoxLayout(in_overlay)
+        in_ov_lay.setContentsMargins(12, 8, 8, 10)
+        in_ov_lay.setSpacing(6)
+
+        self.btn_paste_in = QPushButton(self._tr("paste_btn"))
+        self.btn_paste_in.setFixedHeight(28)
+        self.btn_paste_in.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_paste_in.clicked.connect(self._on_paste_btn_clicked)
+        in_ov_lay.addWidget(self.btn_paste_in)
+
+        in_grid.addWidget(
+            in_overlay, 0, 0,
+            alignment=Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignBottom
+        )
+
+        in_lay.addWidget(in_editor_wrap, 1)
 
         self.root_grid.addWidget(in_box, 1, 0)
 
-        # Row 1, Col 1: Center Action Bar
         self.mid_bar = QWidget()
         self.mid_bar.setFixedWidth(40)
         mid_lay = QVBoxLayout(self.mid_bar)
@@ -2382,7 +2700,6 @@ class LLMTranslateWindow(QMainWindow):
 
         mid_lay.addStretch(1)
 
-        # Кнопка остановки скрыта в простое и появляется с красным контуром только во время перевода
         self.btn_stop = QPushButton()
         self.btn_stop.setObjectName("StopBtn")
         self.btn_stop.setFixedSize(38, 34)
@@ -2393,7 +2710,6 @@ class LLMTranslateWindow(QMainWindow):
 
         self.root_grid.addWidget(self.mid_bar, 1, 1)
 
-        # Row 1, Col 2: Output Panel
         out_box = QWidget()
         out_lay = QGridLayout(out_box)
         out_lay.setContentsMargins(0, 0, 0, 0)
@@ -2406,20 +2722,34 @@ class LLMTranslateWindow(QMainWindow):
         self.t_out.customContextMenuRequested.connect(self._show_out_context_menu)
         out_lay.addWidget(self.t_out, 0, 0)
 
+        out_overlay = QWidget()
+        out_overlay.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
+        ov_lay = QHBoxLayout(out_overlay)
+        ov_lay.setContentsMargins(8, 8, 12, 10)
+        ov_lay.setSpacing(6)
+
         self.btn_instant = QPushButton(self._tr("instant_btn"))
         self.btn_instant.setObjectName("AccentBtn")
         self.btn_instant.setFixedHeight(28)
         self.btn_instant.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_instant.clicked.connect(self.skip_typewriter_animation)
         self.btn_instant.hide()
+        ov_lay.addWidget(self.btn_instant)
+
+        self.btn_copy_out = QPushButton(self._tr("copy_btn"))
+        self.btn_copy_out.setFixedHeight(28)
+        self.btn_copy_out.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_copy_out.clicked.connect(self._on_copy_btn_clicked)
+        self.btn_copy_out.hide()
+        ov_lay.addWidget(self.btn_copy_out)
+
         out_lay.addWidget(
-            self.btn_instant, 0, 0,
+            out_overlay, 0, 0,
             alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignBottom
         )
 
         self.root_grid.addWidget(out_box, 1, 2)
 
-        # Row 2: Thin Progress Line
         self.progress_bar = QProgressBar()
         self.progress_bar.setObjectName("ThinProgress")
         self.progress_bar.setTextVisible(False)
@@ -2428,7 +2758,6 @@ class LLMTranslateWindow(QMainWindow):
         self.progress_bar.setValue(0)
         self.root_grid.addWidget(self.progress_bar, 2, 0, 1, 3)
 
-        # Row 3, Col 0: Bottom Left Status
         bot_left = QWidget()
         bl_lay = QHBoxLayout(bot_left)
         bl_lay.setContentsMargins(2, 0, 2, 0)
@@ -2448,7 +2777,6 @@ class LLMTranslateWindow(QMainWindow):
 
         self.root_grid.addWidget(bot_left, 3, 0)
 
-        # Row 3, Col 2: Bottom Right Controls
         bot_right = QWidget()
         br_lay = QHBoxLayout(bot_right)
         br_lay.setContentsMargins(0, 0, 0, 0)
@@ -2496,7 +2824,6 @@ class LLMTranslateWindow(QMainWindow):
 
         self.root_grid.addWidget(bot_right, 3, 2)
 
-        # Settings Floating Card
         self._build_settings_popup()
         self._refresh_all_tooltips()
         self._refresh_button_icons()
@@ -2518,6 +2845,7 @@ class LLMTranslateWindow(QMainWindow):
         self._set_fade.finished.connect(self._on_settings_fade_finished)
 
         lay = QVBoxLayout(self.settings_card)
+        self.settings_lay = lay
         lay.setContentsMargins(14, 12, 14, 14)
         lay.setSpacing(10)
 
@@ -2618,11 +2946,14 @@ class LLMTranslateWindow(QMainWindow):
             pass
 
     def apply_scale(self, scale_pct, save=True, resize_window=False):
-        scale_pct = max(75, min(150, int(scale_pct)))
+        scale_pct = max(75, min(200, int(scale_pct)))
         self.ui_scale = scale_pct
         sf = scale_pct / 100.0
 
-        # Учитываем доступную геометрию экрана (важно при 2K + системном масштабе 125%)
+        app = QApplication.instance()
+        if app is not None:
+            app.setFont(QFont(UI_FONT, max(8, int(round(10 * sf)))))
+
         avail_w, avail_h = 1920, 1080
         scr = self.screen() or QApplication.primaryScreen()
         if scr is not None:
@@ -2637,6 +2968,8 @@ class LLMTranslateWindow(QMainWindow):
             target_h = min(max(min_h, int(round(590 * sf))), max(min_h, avail_h - 60))
             self.resize(target_w, target_h)
 
+        self._apply_stylesheet()
+
         margin = max(8, int(round(12 * sf)))
         spacing = max(5, int(round(8 * sf)))
         self.root_grid.setContentsMargins(margin, margin, margin, margin)
@@ -2645,14 +2978,25 @@ class LLMTranslateWindow(QMainWindow):
 
         self.dd_src.apply_scale(sf, 34, 11, base_min_popup=200)
         self.dd_tgt.apply_scale(sf, 34, 11, base_min_popup=200)
-        self.dd_model.apply_scale(sf, 30, 10, base_min_popup=240)
-        self.dd_vision_model.apply_scale(sf, 28, 10, base_min_popup=240)
+        self.dd_model.apply_scale(sf, 30, 10, base_min_popup=260)
+        self.dd_vision_model.apply_scale(sf, 28, 10, base_min_popup=260)
         self.dd_scale.apply_scale(sf, 26, 10, base_min_popup=86)
         self.dd_scale.setFixedWidth(max(78, int(round(92 * sf))))
 
         editor_fs = max(9, int(round(12 * sf)))
-        self.t_in.setFont(QFont(UI_FONT, editor_fs))
-        self.t_out.setFont(QFont(UI_FONT, editor_fs))
+        ed_font = QFont(UI_FONT, editor_fs)
+        self.t_in.setFont(ed_font)
+        self.t_out.setFont(ed_font)
+        self.t_in.document().setDefaultFont(ed_font)
+        self.t_out.document().setDefaultFont(ed_font)
+
+        self.img_banner.setFixedHeight(max(34, int(round(44 * sf))))
+        self.lbl_img_thumb.setFixedSize(max(36, int(round(48 * sf))), max(24, int(round(32 * sf))))
+        vis_sz = max(14, int(round(18 * sf)))
+        self.lbl_img_vis_icon.setFixedSize(vis_sz + 2, vis_sz + 2)
+        self.lbl_img_info.setFont(QFont(UI_FONT, max(8, int(round(10 * sf))), QFont.Weight.DemiBold))
+        rm_sz = max(22, int(round(26 * sf)))
+        self.btn_img_remove.setFixedSize(rm_sz, rm_sz)
 
         mid_w = max(32, int(round(40 * sf)))
         btn_w = max(30, int(round(38 * sf)))
@@ -2663,24 +3007,34 @@ class LLMTranslateWindow(QMainWindow):
             b.setFixedSize(btn_w, btn_h)
         self.btn_go.setFixedSize(btn_w, go_h)
 
+        self.progress_bar.setFixedHeight(max(3, int(round(3 * sf))))
+
         bot_h = max(26, int(round(30 * sf)))
         for b in (self.btn_refresh, self.btn_load_model, self.btn_settings):
             b.setFixedSize(bot_h, bot_h)
         self.btn_server.setFixedHeight(bot_h)
         self.btn_vram.setFixedHeight(bot_h)
         self.btn_instant.setFixedHeight(max(24, int(round(28 * sf))))
+        self.btn_copy_out.setFixedHeight(max(24, int(round(28 * sf))))
+        self.btn_paste_in.setFixedHeight(max(24, int(round(28 * sf))))
 
         small_fs = max(8, int(round(10 * sf)))
         title_fs = max(9, int(round(10 * sf)))
         sub_fs = max(8, int(round(9 * sf)))
         self.chk_auto.setFont(QFont(UI_FONT, small_fs))
+        self.chk_auto.updateGeometry()
         self.lbl_status.setFont(QFont(UI_FONT, small_fs, QFont.Weight.DemiBold))
 
-        # Масштабируем карточку настроек и все её элементы
         self.settings_card.setFixedWidth(max(280, int(round(320 * sf))))
+        self.settings_lay.setContentsMargins(
+            max(10, int(round(14 * sf))), max(9, int(round(12 * sf))),
+            max(10, int(round(14 * sf))), max(10, int(round(14 * sf)))
+        )
+        self.settings_lay.setSpacing(max(7, int(round(10 * sf))))
         self.lbl_set_title.setFont(QFont(UI_FONT, title_fs, QFont.Weight.Bold))
         for sw in (self.chk_pin, self.chk_smart, self.chk_thinking):
             sw.setFont(QFont(UI_FONT, small_fs))
+            sw.updateGeometry()
         for lbl in (self.lbl_set_vision, self.lbl_set_theme):
             lbl.setFont(QFont(UI_FONT, sub_fs, QFont.Weight.DemiBold))
         for lbl in (self.lbl_set_scale, self.lbl_set_lang):
@@ -2699,9 +3053,23 @@ class LLMTranslateWindow(QMainWindow):
             b.setIconSize(QSize(lang_ico_w, lang_ico_h))
             b.setFont(QFont(UI_FONT, small_fs, QFont.Weight.DemiBold))
 
-        self._apply_stylesheet()
         self._refresh_button_icons()
+        self._refresh_model_dropdown_labels()
+        for sel in (self.dd_src, self.dd_tgt, self.dd_model, self.dd_vision_model, self.dd_scale):
+            sel._apply_display_text(sel.current_val)
         self._apply_elided_status_text()
+
+        if self._tw_main_target or self._tw_mismatch_warning:
+            show_dict = self._tw_stream_finished and int(self._tw_displayed_chars) >= len(self._tw_main_target)
+            self._render_phased_output(
+                self._tw_main_target[:int(self._tw_displayed_chars)],
+                self._tw_dict_sections if show_dict else [],
+                self._tw_is_dict_mode,
+                self._tw_word,
+                self._tw_mismatch_warning,
+                dict_pending=(self._tw_is_dict_mode and not self._tw_stream_finished and int(self._tw_displayed_chars) >= len(self._tw_main_target))
+            )
+
         if self.settings_card.isVisible():
             self._sync_settings_popup_position()
         if save:
@@ -2763,6 +3131,15 @@ class LLMTranslateWindow(QMainWindow):
         sf = self.ui_scale / 100.0
         btn_fs = max(9, int(round(11 * sf)))
         btn_pad_h = max(6, int(round(8 * sf)))
+        ed_pt = max(9, int(round(12 * sf)))
+        sel_pt = max(8, int(round(11 * sf)))
+        lbl_pt = max(8, int(round(10 * sf)))
+        quant_pt = max(7, int(round(8 * sf)))
+        menu_pt = max(8, int(round(10 * sf)))
+        sb_w = max(6, int(round(8 * sf)))
+        r_sm = max(3, int(round(4 * sf)))
+        r_md = max(4, int(round(6 * sf)))
+        r_lg = max(6, int(round(8 * sf)))
         qss = f"""
         QMainWindow, QWidget#CentralRoot {{
             background-color: {t['bg_root']};
@@ -2771,7 +3148,7 @@ class LLMTranslateWindow(QMainWindow):
         QFrame#SelectorBox {{
             background-color: {t['bg_input']};
             border: 1px solid {t['border']};
-            border-radius: 6px;
+            border-radius: {r_md}px;
         }}
         QFrame#SelectorBox:hover {{
             border: 1px solid {t['border_focus']};
@@ -2783,14 +3160,25 @@ class LLMTranslateWindow(QMainWindow):
             background: transparent;
             color: {t['text_main']};
             border: none;
+            font-family: "{UI_FONT}";
+            font-size: {sel_pt}pt;
+            font-weight: 600;
             selection-background-color: {t['bg_accent']};
+        }}
+        QLabel#QuantBadge {{
+            color: {t['text_muted']};
+            font-family: "{UI_FONT}";
+            font-size: {quant_pt}pt;
+            font-weight: 500;
+            padding-right: 2px;
         }}
         QFrame#SelectorBox QPushButton {{
             background: transparent;
             color: {t['text_muted']};
             border: none;
-            border-radius: 4px;
+            border-radius: {r_sm}px;
             padding: 0px;
+            font-size: {sel_pt}pt;
         }}
         QFrame#SelectorBox QPushButton:hover {{
             background-color: {t['bg_hover']};
@@ -2799,7 +3187,7 @@ class LLMTranslateWindow(QMainWindow):
         QFrame#SelectorPopup {{
             background-color: {t['bg_popup']};
             border: 1px solid {t['border_focus']};
-            border-radius: 6px;
+            border-radius: {r_md}px;
         }}
         QListWidget {{
             background-color: {t['bg_popup']};
@@ -2807,10 +3195,12 @@ class LLMTranslateWindow(QMainWindow):
             border: none;
             outline: none;
             padding: 2px;
+            font-family: "{UI_FONT}";
+            font-size: {lbl_pt}pt;
         }}
         QListWidget::item {{
             padding: 2px 8px;
-            border-radius: 4px;
+            border-radius: {r_sm}px;
         }}
         QListWidget::item:selected {{
             background-color: {t['bg_accent']};
@@ -2823,8 +3213,10 @@ class LLMTranslateWindow(QMainWindow):
             background-color: {t['bg_surface']};
             color: {t['text_main']};
             border: 1px solid {t['border']};
-            border-radius: 8px;
-            padding: 10px;
+            border-radius: {r_lg}px;
+            padding: {max(8, int(round(10 * sf)))}px;
+            font-family: "{UI_FONT}";
+            font-size: {ed_pt}pt;
             selection-background-color: {t['bg_accent']};
             selection-color: #ffffff;
         }}
@@ -2835,21 +3227,23 @@ class LLMTranslateWindow(QMainWindow):
             background-color: {t['bg_surface_alt']};
             color: {t['text_main']};
             border: 1px solid {t['border']};
-            border-radius: 8px;
-            padding: 10px;
+            border-radius: {r_lg}px;
+            padding: {max(8, int(round(10 * sf)))}px;
+            font-family: "{UI_FONT}";
+            font-size: {ed_pt}pt;
             selection-background-color: {t['bg_accent']};
             selection-color: #ffffff;
         }}
         QFrame#ImageBanner {{
             background-color: {t['bg_input']};
             border: 1px solid {t['border_focus']};
-            border-radius: 6px;
+            border-radius: {r_md}px;
         }}
         QPushButton {{
             background-color: {t['bg_btn']};
             color: {t['text_main']};
             border: 1px solid {t['border']};
-            border-radius: 6px;
+            border-radius: {r_md}px;
             padding: 0 {btn_pad_h}px;
             font-family: "{UI_FONT}";
             font-size: {btn_fs}px;
@@ -2899,32 +3293,37 @@ class LLMTranslateWindow(QMainWindow):
         QProgressBar#ThinProgress {{
             background-color: {t['border']};
             border: none;
-            border-radius: 1px;
+            border-radius: {max(1, int(round(1.5 * sf)))}px;
         }}
         QProgressBar#ThinProgress::chunk {{
-            background-color: {t['bg_accent']};
-            border-radius: 1px;
+            background-color: #22c55e;
+            border-radius: {max(1, int(round(1.5 * sf)))}px;
         }}
         QFrame#SettingsCard {{
             background-color: {t['bg_popup']};
             border: 1px solid {t['border_focus']};
-            border-radius: 8px;
+            border-radius: {r_lg}px;
         }}
         QFrame#SeparatorLine {{
             color: {t['border']};
         }}
         QLabel {{
             color: {t['text_main']};
+            font-family: "{UI_FONT}";
+            font-size: {lbl_pt}pt;
         }}
         QMenu {{
             background-color: {t['bg_popup']};
             color: {t['text_main']};
             border: 1px solid {t['border']};
-            padding: 4px;
+            padding: {max(3, int(round(4 * sf)))}px;
+            border-radius: {r_md}px;
+            font-family: "{UI_FONT}";
+            font-size: {menu_pt}pt;
         }}
         QMenu::item {{
-            padding: 5px 18px;
-            border-radius: 4px;
+            padding: {max(4, int(round(5 * sf)))}px {max(14, int(round(18 * sf)))}px;
+            border-radius: {r_sm}px;
         }}
         QMenu::item:selected {{
             background-color: {t['bg_accent']};
@@ -2932,13 +3331,13 @@ class LLMTranslateWindow(QMainWindow):
         }}
         QScrollBar:vertical {{
             background: transparent;
-            width: 8px;
+            width: {sb_w}px;
             margin: 2px;
         }}
         QScrollBar::handle:vertical {{
             background: {t['scroll_handle']};
             min-height: 24px;
-            border-radius: 4px;
+            border-radius: {sb_w // 2}px;
         }}
         QScrollBar::handle:vertical:hover {{
             background: {t['scroll_hover']};
@@ -2981,6 +3380,32 @@ class LLMTranslateWindow(QMainWindow):
                 sc_pop_contains = self.dd_scale.popup.isVisible() and self.dd_scale.popup.geometry().contains(local_pt)
                 if not self.settings_card.geometry().contains(local_pt) and not btn_rect.contains(local_pt) and not vis_pop_contains and not sc_pop_contains:
                     self._hide_settings_card_animated()
+
+            clicked_w = QApplication.widgetAt(gp)
+            if clicked_w is not None and self.isAncestorOf(clicked_w):
+                in_selector_or_popup = any(
+                    sel is clicked_w
+                    or sel.isAncestorOf(clicked_w)
+                    or (sel.popup.isVisible() and (sel.popup is clicked_w or sel.popup.isAncestorOf(clicked_w)))
+                    for sel in all_selectors
+                )
+                is_input_area = (
+                    in_selector_or_popup
+                    or clicked_w is self.t_in
+                    or clicked_w is self.t_in.viewport()
+                    or clicked_w is self.t_out
+                    or clicked_w is self.t_out.viewport()
+                    or isinstance(clicked_w, (QLineEdit, QMenu))
+                )
+                if not is_input_area:
+                    fw = QApplication.focusWidget()
+                    if fw is not None and fw is not self.centralWidget():
+                        fw.clearFocus()
+                    self.centralWidget().setFocus(Qt.FocusReason.MouseFocusReason)
+                    if self.t_out.textCursor().hasSelection():
+                        cur = self.t_out.textCursor()
+                        cur.clearSelection()
+                        self.t_out.setTextCursor(cur)
         return super().eventFilter(obj, event)
 
     def resizeEvent(self, event):
@@ -3034,6 +3459,7 @@ class LLMTranslateWindow(QMainWindow):
         self._refresh_button_icons()
         self._refresh_model_dropdown_labels()
         self.md_highlighter.rehighlight()
+        self._set_progress_bar_color(self._raw_status_color)
         for sw in (self.chk_auto, self.chk_pin, self.chk_smart, self.chk_thinking):
             sw.update()
         if self._tw_main_target or self._tw_mismatch_warning:
@@ -3061,6 +3487,8 @@ class LLMTranslateWindow(QMainWindow):
         self.chk_auto.updateGeometry()
         self.btn_server.setText(self._tr("server_btn"))
         self.btn_instant.setText(self._tr("instant_btn"))
+        self.btn_copy_out.setText(self._tr("copy_btn"))
+        self.btn_paste_in.setText(self._tr("paste_btn"))
 
         self.lbl_set_title.setText(self._tr("settings_title"))
         self.chk_pin.setText(self._tr("settings_pin"))
@@ -3131,6 +3559,8 @@ class LLMTranslateWindow(QMainWindow):
         self.btn_load_model.setToolTip(self._tr("tip_load_model"))
         self.btn_vram.setToolTip(self._tr("tip_vram"))
         self.btn_settings.setToolTip(self._tr("tip_settings"))
+        self.btn_copy_out.setToolTip(self._tr("tip_copy"))
+        self.btn_paste_in.setToolTip(self._tr("tip_paste"))
 
     def _lang_to_canonical(self, val):
         if not val:
@@ -3232,7 +3662,7 @@ class LLMTranslateWindow(QMainWindow):
             else:
                 self.dd_tgt.set(self._lang_to_display(self._lang_to_canonical(tgt_raw)))
 
-            saved_model = strip_loaded_prefix(cfg.get("model_id", self._tr("select_model")))
+            saved_model = strip_loaded_prefix(str(cfg.get("model_id", self._tr("select_model")))[:256])
             if saved_model and saved_model not in ALL_MODEL_PLACEHOLDERS:
                 self._saved_config_model = saved_model
 
@@ -3240,7 +3670,7 @@ class LLMTranslateWindow(QMainWindow):
             self.enable_thinking = bool(cfg.get("enable_thinking", False))
             self.chk_thinking.setChecked(self.enable_thinking)
 
-            saved_vis = strip_loaded_prefix(cfg.get("vision_model_id", ""))
+            saved_vis = strip_loaded_prefix(str(cfg.get("vision_model_id", ""))[:256])
             self.vision_model_id = saved_vis if saved_vis not in ALL_MODEL_PLACEHOLDERS else ""
 
             self.use_smart_search = bool(cfg.get("smart_search", False))
@@ -3317,6 +3747,23 @@ class LLMTranslateWindow(QMainWindow):
             "qwen2-vl", "qwen2.5-vl", "qwen3-vl", "internvl", "moondream", "idefics", "molmo"
         ))
 
+    def _is_model_reasoning_capable(self, model_name):
+        clean = strip_loaded_prefix(model_name)
+        if not clean or clean in ALL_MODEL_PLACEHOLDERS:
+            return False
+        meta = self._model_meta.get(clean, {})
+        if meta.get("reasoning"):
+            return True
+        low = clean.lower()
+        if re.search(
+            r"(?:^|[-_/])(r1|qwq|qvq|thinking|think|reason|reasoning|gpt-oss|magistral|glm-z1|marco-o1|skywork-o1|exaone-deep|cogito)(?:$|[-_/.])",
+            low
+        ):
+            return True
+        if ("qwen3" in low or "qwen-3" in low) and "instruct" not in low and "coder" not in low:
+            return True
+        return False
+
     def _get_available_vision_models(self):
         vis = [m for m in self._available_models if self._is_model_vision_capable(m)]
         vis.sort(key=lambda m: (
@@ -3369,8 +3816,13 @@ class LLMTranslateWindow(QMainWindow):
         prefix = LOADED_PREFIX if clean in self._loaded_vram_models else ""
         meta = self._model_meta.get(clean, {})
         size_str = meta.get("size_str", "")
-        suffix = f"{MODEL_SIZE_SEP}{size_str}" if size_str else ""
-        return f"{prefix}{clean}{suffix}"
+        quant_str = meta.get("quant_str", "")
+        parts = [f"{prefix}{clean}"]
+        if size_str:
+            parts.append(f"{MODEL_SIZE_SEP}{size_str}")
+        if quant_str:
+            parts.append(f"{MODEL_QUANT_SEP}{quant_str}")
+        return "".join(parts)
 
     def _sync_server_button_visibility(self):
         self.btn_server.setVisible(not self._is_online)
@@ -3487,20 +3939,56 @@ class LLMTranslateWindow(QMainWindow):
         self._raw_status_color = color
         self._apply_elided_status_text()
 
+    def _set_progress_bar_color(self, color_hex):
+        col = color_hex if (color_hex and color_hex.startswith("#")) else THEME["bg_accent"]
+        r_pb = max(1, int(round(1.5 * (self.ui_scale / 100.0))))
+        self.progress_bar.setStyleSheet(
+            f"QProgressBar#ThinProgress {{ background-color: {THEME['border']}; border: none; border-radius: {r_pb}px; }}"
+            f"QProgressBar#ThinProgress::chunk {{ background-color: {col}; border-radius: {r_pb}px; }}"
+        )
+
+    def _show_temp_status(self, temp_text, color="#3b82f6", duration_ms=1800):
+        if self._anim_running:
+            return
+        if self._temp_status_restore is None:
+            self._temp_status_restore = (self._raw_status_text, self._raw_status_color, self.progress_bar.value())
+        self._set_status_raw(temp_text, color)
+        self._set_progress_bar_color(color)
+        if self.progress_bar.value() == 0:
+            self.progress_bar.setValue(100)
+        self._temp_status_timer.start(duration_ms)
+
+    def _restore_temp_status(self):
+        if self._temp_status_restore is None:
+            return
+        prev_text, prev_color, prev_val = self._temp_status_restore
+        self._temp_status_restore = None
+        if not self._anim_running:
+            self._set_status_raw(prev_text, prev_color)
+            self._set_progress_bar_color(prev_color)
+            self.progress_bar.setValue(prev_val)
+
     def _start_status_anim(self, phase_text, color="#eab308"):
+        self._temp_status_timer.stop()
+        self._temp_status_restore = None
         self._anim_phase_text = phase_text
         self._anim_color = color
         self._anim_start_ts = time.monotonic()
         self._anim_running = True
+        self._set_progress_bar_color(color)
         self.progress_bar.setRange(0, 0)
 
     def _update_status_anim_phase(self, phase_text, color="#3b82f6"):
         self._anim_phase_text = phase_text
         self._anim_color = color
+        self._set_progress_bar_color(color)
 
     def _stop_status_anim(self, final_text, color="#22c55e", bar_fill=1.0):
+        self._temp_status_timer.stop()
+        self._temp_status_restore = None
         self._anim_running = False
         self._set_status_raw(final_text, color)
+        self._set_progress_bar_color(color)
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(int(bar_fill * 100))
 
@@ -3518,7 +4006,17 @@ class LLMTranslateWindow(QMainWindow):
         self._last_edit_time = time.monotonic()
 
     def _realtime_watcher(self):
-        current_text = self.t_in.toPlainText().strip()
+        raw_in = self.t_in.toPlainText()
+        if len(raw_in) > MAX_INPUT_CHARS:
+            cur = self.t_in.textCursor()
+            pos = min(cur.position(), MAX_INPUT_CHARS)
+            self.t_in.blockSignals(True)
+            self.t_in.setPlainText(raw_in[:MAX_INPUT_CHARS])
+            cur.setPosition(pos)
+            self.t_in.setTextCursor(cur)
+            self.t_in.blockSignals(False)
+            raw_in = raw_in[:MAX_INPUT_CHARS]
+        current_text = raw_in.strip()
         has_img = bool(self._attached_image_b64)
         state_key = f"[IMG:{len(self._attached_image_b64)}]{current_text}" if has_img else current_text
         elapsed = time.monotonic() - self._last_edit_time
@@ -3536,6 +4034,7 @@ class LLMTranslateWindow(QMainWindow):
                 self._update_swap_button_state()
                 self.t_out.clear()
                 self.btn_instant.hide()
+                self.btn_copy_out.hide()
                 self._stop_status_anim(self._tr("ready"), "#22c55e" if self._is_online else THEME["text_muted"], 0.0)
         elif self.chk_auto.isChecked() and self._is_online:
             tgt_canon = self._get_effective_tgt_lang()
@@ -3549,7 +4048,8 @@ class LLMTranslateWindow(QMainWindow):
                 src_mode = self._get_effective_src_mode()
                 eff_mod = self._resolve_effective_vision_model() if has_img else strip_loaded_prefix(self.model_id)
                 current_state = (state_key, src_mode, tgt_canon, f"{eff_mod}:{int(self.enable_thinking)}")
-                if current_state != self._last_translated_state and elapsed >= 0.35:
+                req_delay = 0.65 if len(current_text) > 4000 else 0.35
+                if current_state != self._last_translated_state and elapsed >= req_delay:
                     self._last_translated_state = current_state
                     self.start_translation()
 
@@ -3585,6 +4085,8 @@ class LLMTranslateWindow(QMainWindow):
         if qimg is None or qimg.isNull():
             return False
         w, h = qimg.width(), qimg.height()
+        if w <= 0 or h <= 0 or w > MAX_IMAGE_SOURCE_DIM or h > MAX_IMAGE_SOURCE_DIM:
+            return False
         max_dim = 1568
         if max(w, h) > max_dim:
             qimg = qimg.scaled(max_dim, max_dim, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
@@ -3645,7 +4147,7 @@ class LLMTranslateWindow(QMainWindow):
             "Images (*.png *.jpg *.jpeg *.webp *.bmp);;All files (*.*)"
         )
         if path and os.path.isfile(path):
-            qimg = QImage(path)
+            qimg = load_safe_qimage(path)
             if not qimg.isNull():
                 self._attach_qimage(qimg, name=os.path.basename(path))
 
@@ -3659,7 +4161,7 @@ class LLMTranslateWindow(QMainWindow):
             for u in md.urls():
                 local = u.toLocalFile()
                 if local and os.path.isfile(local) and local.lower().endswith((".png", ".jpg", ".jpeg", ".webp", ".bmp")):
-                    qi = QImage(local)
+                    qi = load_safe_qimage(local)
                     if not qi.isNull():
                         return self._attach_qimage(qi, name=os.path.basename(local))
         return False
@@ -3693,6 +4195,13 @@ class LLMTranslateWindow(QMainWindow):
         menu.addAction(self._tr("ctx_sel_all"), self.t_out.selectAll)
         menu.exec(self.t_out.mapToGlobal(pos))
 
+    def _on_paste_btn_clicked(self):
+        if self._paste_replace_all():
+            self.btn_paste_in.setText(self._tr("pasted"))
+            QTimer.singleShot(1400, lambda: self.btn_paste_in.setText(self._tr("paste_btn")))
+        else:
+            self._show_temp_status(self._tr("paste_empty"), "#eab308", 1600)
+
     def _paste_replace_all(self):
         cb = QApplication.clipboard()
         txt = cb.text()
@@ -3700,8 +4209,8 @@ class LLMTranslateWindow(QMainWindow):
             self.t_in.setPlainText(txt)
             if self.chk_auto.isChecked():
                 self._force_trigger()
-        else:
-            self._try_paste_image_from_clipboard()
+            return True
+        return self._try_paste_image_from_clipboard()
 
     def _wrap_selection(self, pre, suf):
         cur = self.t_in.textCursor()
@@ -3714,16 +4223,22 @@ class LLMTranslateWindow(QMainWindow):
     def _copy_out_selection_or_all(self):
         sel = self.t_out.textCursor().selectedText()
         if sel.strip():
-            QApplication.clipboard().setText(sel.replace("\u2029", "\n"))
-            self._stop_status_anim(self._tr("copied_sel"), "#3b82f6", 1.0)
+            QApplication.clipboard().setText(sel.replace("\u2029", "\n").replace("\u2028", "\n"))
+            self._show_temp_status(self._tr("copied_sel"), "#3b82f6", 1800)
         else:
             self.copy_output()
+
+    def _on_copy_btn_clicked(self):
+        self.copy_output()
+        if self._extract_clean_main_output():
+            self.btn_copy_out.setText(self._tr("copied"))
+            QTimer.singleShot(1400, lambda: self.btn_copy_out.setText(self._tr("copy_btn")))
 
     def copy_output(self):
         main_trans = self._extract_clean_main_output()
         if main_trans:
             QApplication.clipboard().setText(main_trans)
-            self._stop_status_anim(self._tr("copied"), "#3b82f6", 1.0)
+            self._show_temp_status(self._tr("copied"), "#3b82f6", 1800)
 
     def _extract_clean_main_output(self):
         if self._last_clean_translation:
@@ -3769,6 +4284,7 @@ class LLMTranslateWindow(QMainWindow):
         self.clear_attached_image()
         self.t_in.clear()
         self.t_out.clear()
+        self.btn_copy_out.hide()
         self._reset_gen_buttons()
         self._stop_status_anim(self._tr("ready"), "#22c55e" if self._is_online else THEME["text_muted"], 0.0)
 
@@ -3795,7 +4311,6 @@ class LLMTranslateWindow(QMainWindow):
         if self.chk_auto.isChecked():
             self._force_trigger()
 
-    # --- LM Studio CLI & Server Management ---
     def _run_lms_cmd(self, args_list, timeout=15):
         try:
             return subprocess.run(
@@ -3921,10 +4436,13 @@ class LLMTranslateWindow(QMainWindow):
                         size_str = format_bytes_size(size_bytes)
                         if not size_str and item.get("paramsString"):
                             size_str = str(item.get("paramsString"))
+                        quant_str = extract_model_quant(item.get("quantization"), m_key, rel_path)
                         meta_map[m_key] = {
                             "size_bytes": size_bytes,
                             "size_str": size_str,
+                            "quant_str": quant_str,
                             "vision": bool(item.get("vision", False)),
+                            "reasoning": bool(item.get("reasoning", False)),
                             "path": rel_path,
                         }
             except Exception:
@@ -3936,7 +4454,9 @@ class LLMTranslateWindow(QMainWindow):
                 meta_map[api_name] = {
                     "size_bytes": sz,
                     "size_str": format_bytes_size(sz),
+                    "quant_str": extract_model_quant(None, api_name),
                     "vision": any(v in api_name.lower() for v in ("vision", "-vl", "vl-", "llava", "pixtral", "minicpm-v", "gemma-3")),
+                    "reasoning": False,
                     "path": "",
                 }
 
@@ -4187,7 +4707,6 @@ class LLMTranslateWindow(QMainWindow):
         self.btn_stop.hide()
         self._refresh_button_icons()
 
-    # --- TTS ---
     @staticmethod
     def _split_tts_sentences(text, max_len=180):
         raw_parts = re.split(r"(?<=[.!?;\n])\s+", text)
@@ -4230,7 +4749,7 @@ class LLMTranslateWindow(QMainWindow):
 
         text_to_speak = self._extract_clean_main_output()
         if not text_to_speak:
-            self._stop_status_anim(self._tr("tts_empty"), "#eab308", 0.0)
+            self._show_temp_status(self._tr("tts_empty"), "#eab308", 1800)
             return
 
         clean_speech = re.sub(r"[*_`~+#>]", "", text_to_speak).strip()
@@ -4251,8 +4770,10 @@ class LLMTranslateWindow(QMainWindow):
 
         def tts_worker():
             played_online = False
-            tmp_mp3 = os.path.join(tempfile.gettempdir(), f"llm_tts_{os.getpid()}.mp3")
+            tmp_mp3 = ""
             try:
+                with tempfile.NamedTemporaryFile(prefix="llm_tts_", suffix=".mp3", delete=False) as tf:
+                    tmp_mp3 = tf.name
                 sentences = self._split_tts_sentences(clean_speech, max_len=180)
                 audio_buffers = [None] * len(sentences)
                 ready_events = [threading.Event() for _ in sentences]
@@ -4334,7 +4855,7 @@ class LLMTranslateWindow(QMainWindow):
                         ctypes.windll.winmm.mciSendStringW("close llm_tts", None, 0, 0)
                     except Exception:
                         pass
-                if os.path.exists(tmp_mp3):
+                if tmp_mp3 and os.path.exists(tmp_mp3):
                     try:
                         os.remove(tmp_mp3)
                     except Exception:
@@ -4438,9 +4959,8 @@ class LLMTranslateWindow(QMainWindow):
             self.btn_tts.style().polish(self.btn_tts)
             self._refresh_button_icons()
             if show_status and not self._anim_running:
-                self._stop_status_anim(self._tr("tts_stopped"), "#eab308", 0.0)
+                self._show_temp_status(self._tr("tts_stopped"), "#eab308", 1800)
 
-    # --- Text Processing & Parsing ---
     def _normalize_lang_name(self, raw_lang):
         if not raw_lang:
             return None
@@ -4467,13 +4987,48 @@ class LLMTranslateWindow(QMainWindow):
         self._update_swap_button_state()
         return norm
 
-    def _clean_output_text(self, text, tgt_lang, src_text=""):
+    def _clean_output_text(self, text, tgt_lang, src_text="", is_streaming=False, expect_main_tag=False):
         text = RE_THINK_BLOCKS.sub("", text)
         text = RE_UNCLOSED_THINK.sub("", text)
-        text = re.sub(r"<lang>[^<\n]{1,45}</?lang>", "", text, flags=re.IGNORECASE)
-        text = re.sub(r"</?lang>", "", text, flags=re.IGNORECASE)
-        text = re.sub(r"^\s*<lang>[^\n]*$", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"<\|channel\|>thought[\s\S]*?(?:<\|message\|>|$)", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\[THINK\][\s\S]*?(?:\[/THINK\]|$)", "", text, flags=re.IGNORECASE)
         text = RE_SPECIAL_TOKENS.sub("", text)
+        text = text.lstrip()
+
+        if not text:
+            return ""
+
+        main_open_m = re.search(r"<main>", text, flags=re.IGNORECASE)
+        if main_open_m:
+            text = text[main_open_m.start():]
+        elif expect_main_tag:
+            if is_streaming and len(text) < 72:
+                return ""
+            text = re.sub(r"^<lang>[^<\n]{1,50}(?:</?lang>|\n|$)\s*", "", text, flags=re.IGNORECASE)
+            text = re.sub(
+                r"^(?:detected\s+language|source\s+language|language)\s*[:\-]\s*[a-zA-Zа-яА-ЯёЁ\s()\-]{2,40}(?:\n|$)",
+                "",
+                text,
+                flags=re.IGNORECASE
+            )
+            first_ln_m = re.match(r"^([^\n]{1,42})\n+([\s\S]+)$", text)
+            if first_ln_m and self._normalize_lang_name(first_ln_m.group(1)) in LANG_DATA:
+                text = first_ln_m.group(2).lstrip()
+            elif is_streaming and "\n" not in text and self._normalize_lang_name(text) in LANG_DATA:
+                return ""
+        else:
+            if is_streaming and re.match(r"^<l(?:a(?:n(?:g(?:>[^<]*)?)?)?)?$", text, flags=re.IGNORECASE):
+                return ""
+            text = re.sub(r"^<lang>[^<\n]{1,50}(?:</?lang>|\n|$)\s*", "", text, flags=re.IGNORECASE)
+            first_ln_m = re.match(r"^([^\n]{1,42})\n+([\s\S]+)$", text)
+            if first_ln_m and self._normalize_lang_name(first_ln_m.group(1)) in LANG_DATA:
+                text = first_ln_m.group(2).lstrip()
+            elif is_streaming and "\n" not in text and len(text) < 42 and self._normalize_lang_name(text) in LANG_DATA:
+                return ""
+
+        text = re.sub(r"<lang>[^<\n]{1,50}</?lang>\s*", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"</?lang>", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"</?(?:main|dict|lang)[^>]*$", "", text, flags=re.IGNORECASE)
 
         if tgt_lang not in CJK_LANGUAGES:
             text = RE_CJK_GARBAGE.sub("", text)
@@ -4496,12 +5051,15 @@ class LLMTranslateWindow(QMainWindow):
             return "", []
 
         input_word_low = re.sub(r"[*_`~+.,:;!?'\"()\[\]]", "", word).strip().lower()
+        is_short_input = len(word.split()) <= 3
 
-        main_match = re.search(r"<main>\s*(.*?)\s*(?:</main>|<dict>|\n\s*\[|$)", cleaned_raw, flags=re.DOTALL | re.IGNORECASE)
+        main_match = re.search(r"<main>\s*(.*?)\s*(?:</main>|<dict>|$)", cleaned_raw, flags=re.DOTALL | re.IGNORECASE)
         dict_match = re.search(r"<dict>\s*(.*?)\s*(?:</dict>|$)", cleaned_raw, flags=re.DOTALL | re.IGNORECASE)
 
         if main_match:
-            main_raw = main_match.group(1).strip().rstrip(":.")
+            main_raw = main_match.group(1).strip()
+            if is_short_input:
+                main_raw = main_raw.rstrip(":.")
             if dict_match:
                 dict_block = dict_match.group(1).strip()
             else:
@@ -4509,39 +5067,53 @@ class LLMTranslateWindow(QMainWindow):
                 dict_block = re.sub(r"</?(?:main|dict|lang)>", "", after_main, flags=re.IGNORECASE).strip()
         else:
             cleaned_no_tags = re.sub(r"</?(?:main|dict|lang)>", "", cleaned_raw, flags=re.IGNORECASE).strip()
-            lines = [l.strip() for l in cleaned_no_tags.split("\n") if l.strip()]
-            first_line = lines[0] if lines else ""
-            if first_line.startswith("[") and "]" in first_line:
-                main_raw = ""
-                dict_block = "\n".join(lines)
+            if "<dict>" in cleaned_raw.lower():
+                parts_split = re.split(r"<dict>", cleaned_raw, maxsplit=1, flags=re.IGNORECASE)
+                main_raw = re.sub(r"</?(?:main|dict|lang)>", "", parts_split[0], flags=re.IGNORECASE).strip()
+                dict_block = re.sub(r"</?(?:main|dict|lang)>", "", parts_split[1], flags=re.IGNORECASE).strip()
+            elif is_short_input:
+                lines = [l.strip() for l in cleaned_no_tags.split("\n") if l.strip()]
+                first_line = lines[0] if lines else ""
+                if first_line.startswith("[") and "]" in first_line:
+                    main_raw = ""
+                    dict_block = "\n".join(lines)
+                else:
+                    main_raw = first_line.rstrip(":.")
+                    dict_block = "\n".join(lines[1:]) if len(lines) > 1 else ""
             else:
-                main_raw = first_line.rstrip(":.")
-                dict_block = "\n".join(lines[1:]) if len(lines) > 1 else ""
+                bracket_idx = re.search(r"(?:^|\n)\s*(\[[^\[\]\n]{2,45}\])", cleaned_no_tags)
+                if bracket_idx:
+                    main_raw = cleaned_no_tags[:bracket_idx.start()].strip()
+                    dict_block = cleaned_no_tags[bracket_idx.start():].strip()
+                else:
+                    main_raw = cleaned_no_tags
+                    dict_block = ""
 
         main_raw = re.sub(r"^(?:translation|перевод|main|основной перевод)\s*:\s*", "", main_raw, flags=re.IGNORECASE).strip()
 
-        inline_br_in_main = re.search(r"(\[[^\[\]\n]{2,45}\].*)$", main_raw, flags=re.DOTALL)
+        inline_br_in_main = re.search(r"(?:^|\n)\s*(\[[^\[\]\n]{2,45}\].*)$", main_raw, flags=re.DOTALL)
         if inline_br_in_main:
             extra_dict = inline_br_in_main.group(1).strip()
             main_raw = main_raw[:inline_br_in_main.start()].strip().rstrip(",;:")
             dict_block = (extra_dict + "\n" + dict_block).strip()
 
-        for sep in (" — ", " – ", " - ", ": "):
-            if sep in main_raw:
-                left_p, right_p = main_raw.split(sep, 1)
-                if left_p.strip().lower() == input_word_low and right_p.strip():
-                    main_raw = right_p.strip()
-                    break
+        if is_short_input:
+            for sep in (" — ", " – ", " - ", ": "):
+                if sep in main_raw:
+                    left_p, right_p = main_raw.split(sep, 1)
+                    if left_p.strip().lower() == input_word_low and right_p.strip():
+                        main_raw = right_p.strip()
+                        break
 
         overflow_syns = []
-        if ("," in main_raw or ";" in main_raw) and len(word.split()) <= 2:
+        if is_short_input and not dict_block and ("," in main_raw or ";" in main_raw):
             parts = [p.strip().rstrip(":") for p in re.split(r"[,;]", main_raw) if p.strip()]
             main_word = parts[0] if parts else main_raw
             overflow_syns = parts[1:]
         else:
             main_word = main_raw
 
-        if dict_block.strip().lower() in ("none", "нет", "-", "n/a", "null", "empty"):
+        if dict_block.strip().lower() in ("none", "нет", "-", "n/a", "null", "empty", "отсутствуют"):
             dict_block = ""
 
         if dict_block:
@@ -4563,7 +5135,7 @@ class LLMTranslateWindow(QMainWindow):
                     sections.append((pos_name, [syns_str] if syns_str else []))
                 continue
 
-            if ":" in clean_line:
+            if ":" in clean_line and "—" not in clean_line and "–" not in clean_line:
                 pos_part, syn_part = clean_line.split(":", 1)
                 pos_part = pos_part.strip().rstrip(":")
                 syn_part = syn_part.strip().rstrip(":")
@@ -4594,10 +5166,11 @@ class LLMTranslateWindow(QMainWindow):
 
         for pos_h, syns_list in sections:
             h_low = (pos_h or "").lower()
-            is_idiom_or_native_sec = any(
+            is_rich_sec = any(
                 k in h_low for k in (
                     "фразеологизм", "идиом", "idiom", "phras", "устойчив",
-                    "выражени", "сленг", "slang", "исконн", "native", "значени", "meaning", "аналог"
+                    "выражени", "сленг", "slang", "исконн", "native", "значени",
+                    "meaning", "аналог", "замен", "нюанс", "альтернатив", "alternative", "nuance"
                 )
             )
             filtered_syns = []
@@ -4608,21 +5181,20 @@ class LLMTranslateWindow(QMainWindow):
                 if not s_line_clean:
                     continue
 
-                if is_idiom_or_native_sec:
+                if is_rich_sec or "—" in s_line_clean or "–" in s_line_clean:
                     idiom_items = []
-                    for item in re.split(r"[;,]", s_line_clean) if ";" not in s_line_clean else s_line_clean.split(";"):
+                    for item in s_line_clean.split(";") if ";" in s_line_clean else [s_line_clean]:
                         cl = item.strip().rstrip(".")
                         cl_low = cl.lower()
                         if cl and cl_low not in seen_words and cl_low not in ("none", "нет", "-"):
                             seen_words.add(cl_low)
                             idiom_items.append(cl)
                     if idiom_items:
-                        sep_join = "; " if "—" in s_line_clean or "-" in s_line_clean else ", "
-                        filtered_syns.append(sep_join.join(idiom_items))
+                        filtered_syns.append("; ".join(idiom_items))
                 else:
                     items = []
                     for item in re.split(r"[,;]", s_line_clean):
-                        cl = re.sub(r"\(.*?\)", "", item).strip().rstrip(":.")
+                        cl = item.strip().rstrip(":.")
                         cl_low = cl.lower()
                         if (
                             cl and cl_low not in seen_words
@@ -4646,7 +5218,7 @@ class LLMTranslateWindow(QMainWindow):
                     valid_sections.append((pos_h, filtered_syns))
 
         clean_main_cmp = re.sub(r"[*_`~+.,:;!?'\"()\[\]]", "", main_word).strip().lower()
-        if (not clean_main_cmp or clean_main_cmp == input_word_low) and valid_sections:
+        if is_short_input and (not clean_main_cmp or clean_main_cmp == input_word_low) and valid_sections:
             first_line_str = valid_sections[0][1][0]
             first_cand = re.split(r"[,;—–-]", first_line_str)[0].strip()
             if first_cand and first_cand.lower() != input_word_low:
@@ -4669,9 +5241,40 @@ class LLMTranslateWindow(QMainWindow):
     def _split_into_chunks(self, text, max_chars=1800):
         if len(text) <= max_chars:
             return [text]
-        paragraphs = text.split("\n")
+        raw_paragraphs = text.split("\n")
+        pieces = []
+        for p in raw_paragraphs:
+            if len(p) <= max_chars:
+                pieces.append(p)
+            else:
+                sentences = re.split(r"(?<=[.!?])\s+", p)
+                buf = ""
+                for s in sentences:
+                    if len(s) <= max_chars:
+                        if len(buf) + len(s) + 1 <= max_chars:
+                            buf = f"{buf} {s}".strip() if buf else s
+                        else:
+                            if buf:
+                                pieces.append(buf)
+                            buf = s
+                    else:
+                        if buf:
+                            pieces.append(buf)
+                            buf = ""
+                        rem = s
+                        while len(rem) > max_chars:
+                            cut = rem.rfind(" ", 0, max_chars)
+                            if cut <= 0:
+                                cut = max_chars
+                            pieces.append(rem[:cut].strip())
+                            rem = rem[cut:].strip()
+                        if rem:
+                            pieces.append(rem)
+                if buf:
+                    pieces.append(buf)
+
         chunks, current = [], ""
-        for p in paragraphs:
+        for p in pieces:
             if len(current) + len(p) + 1 <= max_chars:
                 current += (p + "\n")
             else:
@@ -4680,7 +5283,7 @@ class LLMTranslateWindow(QMainWindow):
                 current = p + "\n"
         if current:
             chunks.append(current.rstrip("\n"))
-        return chunks
+        return chunks if chunks else [text[:max_chars]]
 
     def _show_instant_mismatch_banner(self, task_id, mismatch_warning):
         if task_id != self._task_id or not mismatch_warning:
@@ -4732,7 +5335,7 @@ class LLMTranslateWindow(QMainWindow):
             self._tw_is_dict_mode,
             self._tw_word,
             self._tw_mismatch_warning,
-            dict_pending=(self._tw_is_dict_mode and not self._tw_stream_finished)
+            dict_pending=(self._tw_is_dict_mode and not self._tw_stream_finished and (self._tw_is_short_query or "<dict>" in self._tw_target_text.lower()))
         )
         if self._tw_stream_finished:
             self._tw_running = False
@@ -4747,6 +5350,7 @@ class LLMTranslateWindow(QMainWindow):
 
         total_main_len = len(self._tw_main_target)
         cur_len = int(self._tw_displayed_chars)
+        has_dict_tag = "<dict>" in self._tw_target_text.lower()
 
         if cur_len < total_main_len:
             if total_main_len <= 35:
@@ -4754,7 +5358,7 @@ class LLMTranslateWindow(QMainWindow):
             elif total_main_len <= 140:
                 chars_per_sec = 75.0
             else:
-                chars_per_sec = max(95.0, min(self._tw_tok_speed * 2.8, 250.0))
+                chars_per_sec = max(95.0, min(self._tw_tok_speed * 2.8, 250.0), total_main_len / 1.8)
 
             step = max(1.0, chars_per_sec * 0.025)
             self._tw_displayed_chars = min(float(total_main_len), self._tw_displayed_chars + step)
@@ -4763,17 +5367,19 @@ class LLMTranslateWindow(QMainWindow):
             partial_main = self._tw_main_target[:new_len]
             main_done_now = (new_len >= total_main_len)
             show_dict_now = (main_done_now and self._tw_stream_finished)
-            show_pending_dots = (self._tw_is_dict_mode and main_done_now and not self._tw_stream_finished)
+            show_pending_dots = (self._tw_is_dict_mode and main_done_now and not self._tw_stream_finished and (self._tw_is_short_query or has_dict_tag))
 
             self._dict_dots_step += 1
-            self._render_phased_output(
-                partial_main,
-                self._tw_dict_sections if show_dict_now else [],
-                self._tw_is_dict_mode,
-                self._tw_word,
-                self._tw_mismatch_warning,
-                dict_pending=show_pending_dots
-            )
+            render_stride = 1 if new_len <= 2500 else (3 if new_len <= 12000 else 6)
+            if main_done_now or (self._dict_dots_step % render_stride == 0):
+                self._render_phased_output(
+                    partial_main,
+                    self._tw_dict_sections if show_dict_now else [],
+                    self._tw_is_dict_mode,
+                    self._tw_word,
+                    self._tw_mismatch_warning,
+                    dict_pending=show_pending_dots
+                )
 
             remaining = total_main_len - new_len
             if (self._tw_stream_finished and remaining > 8) or remaining > 45:
@@ -4796,35 +5402,80 @@ class LLMTranslateWindow(QMainWindow):
                 if self._tw_final_status_msg:
                     self._stop_status_anim(self._tw_final_status_msg, self._tw_final_status_color, 1.0)
             else:
+                prev_frame = self._dict_dots_step // 8
                 self._dict_dots_step += 1
-                self._render_phased_output(
-                    self._tw_main_target,
-                    [],
-                    self._tw_is_dict_mode,
-                    self._tw_word,
-                    self._tw_mismatch_warning,
-                    dict_pending=self._tw_is_dict_mode
-                )
+                curr_frame = self._dict_dots_step // 8
+                if curr_frame != prev_frame or self._dict_dots_step == 1:
+                    self._render_phased_output(
+                        self._tw_main_target,
+                        [],
+                        self._tw_is_dict_mode,
+                        self._tw_word,
+                        self._tw_mismatch_warning,
+                        dict_pending=(self._tw_is_dict_mode and (self._tw_is_short_query or has_dict_tag))
+                    )
 
     def _render_direct_text(self, text):
+        ed_pt = max(9, int(round(12 * (self.ui_scale / 100.0))))
+        ed_font = QFont(UI_FONT, ed_pt)
+        self.t_out.setFont(ed_font)
+        self.t_out.document().setDefaultFont(ed_font)
         self.t_out.setPlainText(text)
+        if text.strip():
+            self.btn_copy_out.show()
+        else:
+            self.btn_copy_out.hide()
 
-    def _format_inline_md_html(self, line):
-        esc = html.escape(line)
-        esc = re.sub(
-            r"`([^`\n]+)`",
-            rf"<code style='background:{THEME['code_bg']};color:{THEME['code_fg']};font-family:{MONO_FONT};padding:1px 4px;'>\1</code>",
-            esc
-        )
-        esc = re.sub(r"\*\*\*([^*]+)\*\*\*", r"<b><i>\1</i></b>", esc)
-        esc = re.sub(r"\*\*([^*]+)\*\*", r"<b>\1</b>", esc)
-        esc = re.sub(r"\*([^*]+)\*", r"<i>\1</i>", esc)
-        esc = re.sub(r"~~([^~]+)~~", r"<s>\1</s>", esc)
-        return esc
+    def _insert_inline_md(self, cursor, line, base_font, base_color):
+        base_fmt = QTextCharFormat()
+        base_fmt.setFont(base_font)
+        base_fmt.setForeground(QColor(base_color))
 
-    def _md_to_html(self, text):
+        pos = 0
+        for m in RE_MD_TOKEN.finditer(line):
+            st, en = m.span()
+            if st > pos:
+                cursor.insertText(line[pos:st], base_fmt)
+            tok = m.group(0)
+            fmt = QTextCharFormat(base_fmt)
+            if tok.startswith("`") and tok.endswith("`") and len(tok) >= 2:
+                code_f = QFont(MONO_FONT, max(8, base_font.pointSize() - 1))
+                fmt.setFont(code_f)
+                fmt.setForeground(QColor(THEME["code_fg"]))
+                fmt.setBackground(QColor(THEME["code_bg"]))
+                cursor.insertText(tok[1:-1], fmt)
+            elif tok.startswith("***") and tok.endswith("***") and len(tok) >= 6:
+                fmt.setFontWeight(QFont.Weight.Bold)
+                fmt.setFontItalic(True)
+                cursor.insertText(tok[3:-3], fmt)
+            elif (tok.startswith("**") and tok.endswith("**") and len(tok) >= 4) or (tok.startswith("__") and tok.endswith("__") and len(tok) >= 4):
+                fmt.setFontWeight(QFont.Weight.Bold)
+                cursor.insertText(tok[2:-2], fmt)
+            elif (tok.startswith("*") and tok.endswith("*") and len(tok) >= 2) or (tok.startswith("_") and tok.endswith("_") and len(tok) >= 2):
+                fmt.setFontItalic(True)
+                cursor.insertText(tok[1:-1], fmt)
+            elif tok.startswith("~~") and tok.endswith("~~") and len(tok) >= 4:
+                fmt.setFontStrikeOut(True)
+                cursor.insertText(tok[2:-2], fmt)
+            elif tok.startswith("++") and tok.endswith("++") and len(tok) >= 4:
+                fmt.setFontUnderline(True)
+                cursor.insertText(tok[2:-2], fmt)
+            else:
+                cursor.insertText(tok, base_fmt)
+            pos = en
+
+        if pos < len(line):
+            cursor.insertText(line[pos:], base_fmt)
+
+    def _insert_formatted_markdown(self, cursor, text, ed_pt, sf, first_block):
+        base_font = QFont(UI_FONT, ed_pt)
+        hdr_font = QFont(UI_FONT, ed_pt + 2, QFont.Weight.Bold)
+        quote_font = QFont(UI_FONT, ed_pt)
+        quote_font.setItalic(True)
+        code_font = QFont(MONO_FONT, max(8, ed_pt - 1))
+        code_hdr_font = QFont(UI_FONT, max(7, ed_pt - 3), QFont.Weight.Bold)
+
         segments = re.split(r"(```[\s\S]*?```)", text)
-        out_parts = []
         for seg in segments:
             if not seg:
                 continue
@@ -4836,80 +5487,202 @@ class LLMTranslateWindow(QMainWindow):
                     if re.match(r"^[a-zA-Z0-9_+\-#]{1,18}$", first_ln.strip()):
                         lang_label = first_ln.strip().upper()
                         inner = rest_code
-                inner = html.escape(inner.strip("\r\n"))
-                hdr = f"<div style='color:{THEME['text_muted']};font-size:10px;font-weight:bold;'>{lang_label}</div>" if lang_label else ""
-                out_parts.append(
-                    f"<div style='background:{THEME['codeblock_bg']};color:{THEME['codeblock_fg']};"
-                    f"font-family:{MONO_FONT};font-size:13px;padding:8px;margin:4px 0;white-space:pre-wrap;'>"
-                    f"{hdr}{inner}</div>"
-                )
+                inner = inner.strip("\r\n")
+
+                blk_code = QTextBlockFormat()
+                blk_code.setBackground(QColor(THEME["codeblock_bg"]))
+                pad_h = round(8 * sf)
+                pad_v = round(4 * sf)
+                blk_code.setLeftMargin(pad_h)
+                blk_code.setRightMargin(pad_h)
+                blk_code.setTopMargin(pad_v)
+                blk_code.setBottomMargin(pad_v)
+
+                if first_block:
+                    cursor.setBlockFormat(blk_code)
+                    first_block = False
+                else:
+                    cursor.insertBlock(blk_code)
+
+                if lang_label:
+                    hdr_fmt = QTextCharFormat()
+                    hdr_fmt.setFont(code_hdr_font)
+                    hdr_fmt.setForeground(QColor(THEME["text_muted"]))
+                    cursor.insertText(lang_label + "\u2028", hdr_fmt)
+
+                code_fmt = QTextCharFormat()
+                code_fmt.setFont(code_font)
+                code_fmt.setForeground(QColor(THEME["codeblock_fg"]))
+                cursor.insertText(inner.replace("\n", "\u2028"), code_fmt)
             else:
-                lines_html = []
                 for ln in seg.split("\n"):
+                    blk_plain = QTextBlockFormat()
+                    bullet_m = re.match(r"^(\s*)[-*•]\s+(.+)$", ln)
+                    num_m = re.match(r"^(\s*)(\d+[.)])\s+(.+)$", ln)
                     h_m = re.match(r"^#{1,3}\s+(.+)$", ln)
                     q_m = re.match(r"^>\s+(.+)$", ln)
-                    if h_m:
-                        lines_html.append(f"<span style='font-size:17px;font-weight:bold;color:{THEME['border_focus']};'>{self._format_inline_md_html(h_m.group(1))}</span>")
-                    elif q_m:
-                        lines_html.append(f"<span style='color:{THEME['text_muted']};font-style:italic;'>▎ {self._format_inline_md_html(q_m.group(1))}</span>")
+
+                    if bullet_m:
+                        indent_lvl = len(bullet_m.group(1)) // 2
+                        blk_plain.setLeftMargin(round((12 + indent_lvl * 12) * sf))
+                    elif num_m:
+                        indent_lvl = len(num_m.group(1)) // 2
+                        blk_plain.setLeftMargin(round((12 + indent_lvl * 12) * sf))
+
+                    if first_block:
+                        cursor.setBlockFormat(blk_plain)
+                        first_block = False
                     else:
-                        lines_html.append(self._format_inline_md_html(ln))
-                out_parts.append("<br>".join(lines_html))
-        return "".join(out_parts)
+                        cursor.insertBlock(blk_plain)
+
+                    if h_m:
+                        self._insert_inline_md(cursor, h_m.group(1), hdr_font, THEME["border_focus"])
+                    elif q_m:
+                        q_pref = QTextCharFormat()
+                        q_pref.setFont(quote_font)
+                        q_pref.setForeground(QColor(THEME["text_muted"]))
+                        cursor.insertText("▎ ", q_pref)
+                        self._insert_inline_md(cursor, q_m.group(1), quote_font, THEME["text_muted"])
+                    elif bullet_m:
+                        b_pref = QTextCharFormat()
+                        b_pref.setFont(QFont(UI_FONT, ed_pt, QFont.Weight.Bold))
+                        b_pref.setForeground(QColor(THEME["border_focus"]))
+                        cursor.insertText("• ", b_pref)
+                        self._insert_inline_md(cursor, bullet_m.group(2), base_font, THEME["text_main"])
+                    elif num_m:
+                        n_pref = QTextCharFormat()
+                        n_pref.setFont(QFont(UI_FONT, ed_pt, QFont.Weight.DemiBold))
+                        n_pref.setForeground(QColor(THEME["border_focus"]))
+                        cursor.insertText(f"{num_m.group(2)} ", n_pref)
+                        self._insert_inline_md(cursor, num_m.group(3), base_font, THEME["text_main"])
+                    elif ln:
+                        self._insert_inline_md(cursor, ln, base_font, THEME["text_main"])
+        return first_block
 
     def _render_phased_output(self, main_text_part, dict_sections_to_show, is_dict_mode, word="", mismatch_warning="", dict_pending=False):
         sb = self.t_out.verticalScrollBar()
         old_scroll = sb.value()
-        base_px = max(10, int(round(15 * (self.ui_scale / 100.0))))
+        sf = self.ui_scale / 100.0
+        ed_pt = max(9, int(round(12 * sf)))
+        sub_pt = max(8, ed_pt - 2)
+        hdr_pt = max(8, ed_pt - 1)
 
-        blocks = []
+        doc = self.t_out.document()
+        doc.setDefaultFont(QFont(UI_FONT, ed_pt))
+        cursor = QTextCursor(doc)
+        cursor.beginEditBlock()
+        doc.clear()
+        cursor = QTextCursor(doc)
+        first_block = True
+
         if mismatch_warning:
-            blocks.append(f"<div style='color:#f59e0b;font-weight:bold;margin-bottom:10px;'>{html.escape(mismatch_warning)}</div>")
+            blk_warn = QTextBlockFormat()
+            blk_warn.setBottomMargin(round(10 * sf))
+            cursor.setBlockFormat(blk_warn)
+            first_block = False
+            fmt_warn = QTextCharFormat()
+            fmt_warn.setFont(QFont(UI_FONT, ed_pt, QFont.Weight.Bold))
+            fmt_warn.setForeground(QColor("#f59e0b"))
+            cursor.insertText(mismatch_warning, fmt_warn)
 
         if main_text_part:
             self._last_clean_translation = main_text_part
-            blocks.append(f"<div style='color:{THEME['text_main']};font-size:{base_px}px;'>{self._md_to_html(main_text_part)}</div>")
+            first_block = self._insert_formatted_markdown(cursor, main_text_part, ed_pt, sf, first_block)
 
         if is_dict_mode:
             if dict_sections_to_show:
-                blocks.append(f"<div style='margin-top:14px;color:{THEME['text_muted']};font-style:italic;font-size:{max(9, base_px - 2)}px;'>{html.escape(word)} — {html.escape(self._tr('dict_variants'))}</div>")
+                blk_lbl = QTextBlockFormat()
+                blk_lbl.setTopMargin(round(14 * sf))
+                if first_block:
+                    cursor.setBlockFormat(blk_lbl)
+                    first_block = False
+                else:
+                    cursor.insertBlock(blk_lbl)
+
+                fmt_lbl = QTextCharFormat()
+                lbl_f = QFont(UI_FONT, sub_pt)
+                lbl_f.setItalic(True)
+                fmt_lbl.setFont(lbl_f)
+                fmt_lbl.setForeground(QColor(THEME["text_muted"]))
+                lbl_prefix = f"{word} — " if self._tw_is_short_query and word else ""
+                cursor.insertText(f"{lbl_prefix}{self._tr('dict_variants')}", fmt_lbl)
+
                 for pos_h, syns_list in dict_sections_to_show:
                     if pos_h:
                         loc_h = self._translate_pos_header(pos_h)
                         h_low = loc_h.lower()
-                        if any(k in h_low for k in ("исконн", "native", "значени", "meaning", "аналог")):
+                        if any(k in h_low for k in ("исконн", "native", "значени", "meaning", "аналог", "сленг", "slang")):
                             col = "#10b981"
                         elif any(k in h_low for k in ("фразеологизм", "идиом", "idiom", "phras")):
                             col = "#a855f7"
                         else:
                             col = THEME["border_focus"]
-                        blocks.append(f"<div style='margin-top:8px;color:{col};font-weight:bold;font-size:{max(10, base_px - 1)}px;'>{html.escape(loc_h)}</div>")
+                        blk_pos = QTextBlockFormat()
+                        blk_pos.setTopMargin(round(8 * sf))
+                        cursor.insertBlock(blk_pos)
+                        fmt_pos = QTextCharFormat()
+                        fmt_pos.setFont(QFont(UI_FONT, hdr_pt, QFont.Weight.Bold))
+                        fmt_pos.setForeground(QColor(col))
+                        cursor.insertText(loc_h, fmt_pos)
                     for s_line in syns_list:
-                        blocks.append(f"<div style='margin-left:14px;color:{THEME['text_main']};font-size:{max(9, base_px - 2)}px;'>{html.escape(s_line)}</div>")
+                        blk_syn = QTextBlockFormat()
+                        blk_syn.setLeftMargin(round(14 * sf))
+                        cursor.insertBlock(blk_syn)
+                        fmt_syn = QTextCharFormat()
+                        fmt_syn.setFont(QFont(UI_FONT, sub_pt))
+                        fmt_syn.setForeground(QColor(THEME["text_main"]))
+                        cursor.insertText(s_line, fmt_syn)
             elif dict_pending and main_text_part:
                 wave_frames = ["•  ·  ·", "·  •  ·", "·  ·  •", "·  •  ·"]
-                dots = wave_frames[self._dict_dots_step % len(wave_frames)]
-                blocks.append(f"<div style='margin-top:14px;color:{THEME['text_muted']};font-style:italic;font-size:{max(9, base_px - 2)}px;'>{html.escape(word)} — {html.escape(self._tr('dict_variants'))}</div>")
-                blocks.append(f"<div style='margin-top:6px;color:{THEME['border_focus']};font-weight:bold;font-size:{base_px + 1}px;'>{dots}</div>")
+                dots = wave_frames[(self._dict_dots_step // 8) % len(wave_frames)]
+                blk_lbl = QTextBlockFormat()
+                blk_lbl.setTopMargin(round(14 * sf))
+                if first_block:
+                    cursor.setBlockFormat(blk_lbl)
+                    first_block = False
+                else:
+                    cursor.insertBlock(blk_lbl)
 
-        self.t_out.setHtml("".join(blocks))
+                fmt_lbl = QTextCharFormat()
+                lbl_f = QFont(UI_FONT, sub_pt)
+                lbl_f.setItalic(True)
+                fmt_lbl.setFont(lbl_f)
+                fmt_lbl.setForeground(QColor(THEME["text_muted"]))
+                lbl_prefix = f"{word} — " if self._tw_is_short_query and word else ""
+                cursor.insertText(f"{lbl_prefix}{self._tr('dict_variants')}", fmt_lbl)
+
+                blk_dots = QTextBlockFormat()
+                blk_dots.setTopMargin(round(6 * sf))
+                cursor.insertBlock(blk_dots)
+                fmt_dots = QTextCharFormat()
+                fmt_dots.setFont(QFont(UI_FONT, ed_pt + 1, QFont.Weight.Bold))
+                fmt_dots.setForeground(QColor(THEME["border_focus"]))
+                cursor.insertText(dots, fmt_dots)
+
+        cursor.endEditBlock()
+
+        if main_text_part:
+            self.btn_copy_out.show()
+            self.btn_copy_out.raise_()
+        else:
+            self.btn_copy_out.hide()
+
         if self._tw_running:
             sb.setValue(sb.maximum())
         else:
             sb.setValue(old_scroll)
 
-    # --- Prompts & OpenAI API ---
-    def _build_prompts(self, text, src_mode, tgt_lang, is_dict_mode):
+    def _build_prompts(self, text, src_mode, tgt_lang, is_short_query):
         has_emojis = bool(RE_EMOJI_CHARS.search(text))
         emoji_rule = (
             "Preserve any emojis/emoticons from the input in their exact contextual places."
             if has_emojis else
             "STRICT EMOJI BAN: The input contains NO emojis. NEVER add or invent emojis/emoticons."
         )
-        src_hint = f"from {src_mode} " if src_mode and src_mode not in AUTO_MODES_CANON else ""
         cat_lang = "Russian" if self.ui_lang == "ru" else "English"
         idiom_header = "[фразеологизмы и идиомы]" if self.ui_lang == "ru" else "[idioms & phrases]"
         native_header = "[исконные аналоги / значение]" if self.ui_lang == "ru" else "[native equivalents / meaning]"
+        alt_header = "[варианты замены / нюансы]" if self.ui_lang == "ru" else "[contextual alternatives / nuances]"
 
         lang_detect_instruction = (
             "Identify the TRUE language of the source text by its vocabulary and grammar (NOT just the alphabet! "
@@ -4917,57 +5690,102 @@ class LLMTranslateWindow(QMainWindow):
             "'Bonjour le monde' is French -> <lang>French</lang>; 'Hello world' is English -> <lang>English</lang>)."
         )
 
-        if is_dict_mode:
+        if src_mode and src_mode not in AUTO_MODES_CANON:
+            lang_step = (
+                f"1. LANGUAGE VERIFICATION: The user selected {src_mode}, but might have pasted another language by mistake. "
+                f"{lang_detect_instruction} Output `<lang>TrueLanguageInEnglish</lang>` on line 1. "
+                f"Translate accurately from its TRUE detected language into pure {tgt_lang} — NEVER produce hybrid or untranslated words!"
+            )
+            src_phrase = f"into {tgt_lang}"
+        else:
+            lang_step = (
+                f"1. LANGUAGE DETECTION: {lang_detect_instruction} Output `<lang>TrueLanguageInEnglish</lang>` on line 1."
+            )
+            src_phrase = f"into {tgt_lang}"
+
+        if is_short_query:
             sys_prompt = (
-                f"You are an authoritative bilingual translator, lexicographer, and etymology/slang expert translating {src_hint}into {tgt_lang}.\n"
+                f"You are an authoritative bilingual translator, lexicographer, and slang/idiom expert at DeepL level translating {src_phrase}.\n"
                 f"STRICT RULES:\n"
-                f"1. Line 1: {lang_detect_instruction} Output the language name in English inside <lang>...</lang>.\n"
-                f"2. Line 2: Inside <main>...</main>, output ONLY the single best, most natural translation in {tgt_lang}. NEVER repeat the untranslated source word inside <main>!\n"
-                f"3. Inside <dict>...</dict>, put EVERY category on its OWN NEW LINE starting with `[Category Name]` in {cat_lang}. Include {native_header} if slang/loanword, and {idiom_header} ONLY if genuine idioms exist. Leave <dict></dict> empty if no variants are needed.\n"
+                f"{lang_step}\n"
+                f"2. Inside `<main>...</main>`, output ONLY the single best, most natural translation in {tgt_lang}. NEVER repeat the untranslated source word inside `<main>`!\n"
+                f"3. Inside `<dict>...</dict>`, provide a rich bilingual dictionary entry with EVERY category on its OWN NEW LINE starting with `[Category Name]` in {cat_lang}:\n"
+                f"   - List ALL relevant parts of speech (`[существительное]`, `[глагол]`, `[прилагательное]`, `[причастие]`, `[наречие]`, etc.) with 3–5 nuanced synonyms each.\n"
+                f"   - Include `{native_header}` if the word is slang, gaming/internet meme, or loanword (e.g. 'wasted' -> 'потрачено (игр.), в стельку пьяный').\n"
+                f"   - Include `{idiom_header}` with 2–4 real idioms, phrasal verbs, or collocations using this word (`phrase — translation`).\n"
+                f"   - Leave `<dict></dict>` empty only if it is a proper name or number.\n"
                 f"4. {emoji_rule}"
             )
+            if self.enable_thinking:
+                sys_prompt += "\n5. THINKING MODE: Reason briefly inside `<think>...</think>` BEFORE `<lang>...</lang>`."
+            else:
+                sys_prompt += "\n5. DIRECT OUTPUT: Do NOT output `<think>` tags. Start immediately with `<lang>...</lang>`."
+
             user_instruction = (
-                f"Translate \"{text}\" {src_hint}into {tgt_lang}:\n"
+                f"Translate the text inside <source_text> {src_phrase}:\n"
                 f"<lang>TrueLanguageInEnglish</lang>\n"
                 f"<main>Best translation in {tgt_lang}</main>\n"
                 f"<dict>\n"
-                f"[Part of speech in {cat_lang}] synonym 1, synonym 2\n"
-                f"</dict>"
+                f"[Part of speech in {cat_lang}] synonym 1, synonym 2, synonym 3\n"
+                f"{idiom_header} idiom 1 — translation 1; idiom 2 — translation 2\n"
+                f"</dict>\n\n"
+                f"<source_text>\n{text}\n</source_text>"
             )
             return sys_prompt, [user_instruction]
 
-        has_md = bool(RE_MD_TOKEN.search(text) or re.search(r"(?:^|\n)(?:#{1,3}|>)\s+", text))
+        has_md = bool(RE_MD_TOKEN.search(text) or re.search(r"(?:^|\n)(?:#{1,3}|>|[-*•]|\d+[.)])\s+", text))
         md_rule = (
-            f"3. MARKDOWN & CODE BLOCKS: Preserve existing formatting markers (`inline code`, ```code blocks```, **bold**, *italic*, # headers, > quotes). "
+            f"3. MARKDOWN & CODE BLOCKS: Preserve existing formatting markers (`inline code`, ```code blocks```, **bold**, *italic*, # headers, > quotes, lists). "
             f"Inside code blocks, keep syntax intact and translate only string literals/comments into {tgt_lang}."
             if has_md else
-            "3. STRICT PLAIN TEXT: The source text has NO bold or italic formatting. NEVER add **bold** or *italic* asterisks. Output clean plain text."
-        )
-
-        lang_rule = (
-            f"1. LANGUAGE DETECTION: {lang_detect_instruction} Output `<lang>TrueLanguageInEnglish</lang>` on line 1, then immediately translate the text into {tgt_lang}."
+            "3. STRICT PLAIN TEXT IN `<main>`: The source text has NO bold or italic formatting. NEVER add **bold** or *italic* asterisks inside `<main>`. Output clean plain text."
         )
 
         raw_chunks = self._split_into_chunks(text, max_chars=1800)
-        chunks = [
-            f"Translate the text inside <source_text> {src_hint}into {tgt_lang}. Every sentence must be translated:\n"
-            f"<source_text>\n{c}\n</source_text>"
-            for c in raw_chunks
-        ]
+        is_single_chunk = len(raw_chunks) == 1
+
+        if is_single_chunk:
+            dict_rule = (
+                f"4. SMART IDIOMS & CONTEXTUAL ALTERNATIVES (`<dict>...</dict>`):\n"
+                f"   - ONLY if the source text contains idioms, phrasal verbs, proverbs, slang, or specific words/phrases that have genuinely important alternative translations in this context, list them in `<dict>...</dict>` on separate lines using `{idiom_header}` and/or `{alt_header}` formatted as `source phrase — alternative 1, alternative 2`.\n"
+                f"   - If the text is straightforward with no idioms or notable nuances, output `<dict></dict>` completely empty. Do NOT nitpick ordinary words."
+            )
+            output_template = (
+                f"Translate the text inside `<source_text>` {src_phrase} using exact tags:\n"
+                f"<lang>TrueLanguageInEnglish</lang>\n"
+                f"<main>\n"
+                f"Fluent translation in {tgt_lang}\n"
+                f"</main>\n"
+                f"<dict>\n"
+                f"</dict>\n\n"
+                f"<source_text>\n{raw_chunks[0]}\n</source_text>"
+            )
+            chunks = [output_template]
+        else:
+            dict_rule = "4. MULTI-CHUNK OUTPUT: Output `<lang>TrueLanguageInEnglish</lang>` on line 1 followed immediately by `<main>...</main>` with the complete translation."
+            chunks = [
+                f"Translate the text inside `<source_text>` {src_phrase}. Every sentence must be translated:\n"
+                f"<lang>TrueLanguageInEnglish</lang>\n"
+                f"<main>\n"
+                f"Translation in {tgt_lang}\n"
+                f"</main>\n\n"
+                f"<source_text>\n{c}\n</source_text>"
+                for c in raw_chunks
+            ]
 
         sys_prompt = (
-            f"You are an elite literary and technical translator translating {src_hint}into {tgt_lang}.\n"
+            f"You are an elite literary and technical translator at DeepL Pro level translating {src_phrase}.\n"
             f"CRITICAL RULES:\n"
-            f"{lang_rule}\n"
-            f"2. 100% PURE {tgt_lang.upper()} TRANSLATION: Translate accurately and idiomatically into {tgt_lang}.\n"
+            f"{lang_step}\n"
+            f"2. 100% PURE, NATURAL {tgt_lang.upper()} IN `<main>...</main>`: Translate accurately, fluently, and idiomatically into {tgt_lang}, preserving tone and register.\n"
             f"{md_rule}\n"
-            f"4. EMOJI POLICY: {emoji_rule}\n"
-            f"5. Output ONLY `<lang>...</lang>` on line 1 followed by the translation in {tgt_lang}."
+            f"{dict_rule}\n"
+            f"5. EMOJI POLICY: {emoji_rule}"
         )
         if self.enable_thinking:
-            sys_prompt += "\n6. THINKING MODE ENABLED: Reason briefly inside <think>...</think> before outputting <lang>...</lang> and the translation."
+            sys_prompt += "\n6. THINKING MODE ENABLED: Reason briefly inside `<think>...</think>` before outputting `<lang>...</lang>`."
         else:
-            sys_prompt += "\n6. DIRECT OUTPUT: Do NOT output <think> tags. Start immediately with <lang>...</lang> and the translation."
+            sys_prompt += "\n6. DIRECT OUTPUT: Do NOT output `<think>` tags. Start immediately with `<lang>...</lang>`."
 
         return sys_prompt, chunks
 
@@ -5099,21 +5917,24 @@ class LLMTranslateWindow(QMainWindow):
 
         plain_probe = re.sub(r"[*_`~+]", "", text).strip()
         words = plain_probe.split()
-        is_dict_mode = (
+        is_short_query = (
             (not has_img)
-            and 1 <= len(words) <= 6
-            and len(plain_probe) <= 65
+            and 1 <= len(words) <= 5
+            and len(plain_probe) <= 55
             and "\n" not in plain_probe
             and not any(plain_probe.endswith(p) for p in (".", "!", "?", ";", ":"))
         )
+        is_dict_mode = not has_img
         self._tw_is_dict_mode = is_dict_mode
+        self._tw_is_short_query = is_short_query
         self._tw_word = plain_probe
+        self.btn_copy_out.hide()
 
         effective_prompt_src = fast_guessed_lang if (self.auto_detect_mode == "fast" and fast_guessed_lang) else src_mode
         if has_img:
             sys_prompt, chunks = self._build_vision_prompts(text, effective_prompt_src, tgt_lang)
         else:
-            sys_prompt, chunks = self._build_prompts(text, effective_prompt_src, tgt_lang, is_dict_mode)
+            sys_prompt, chunks = self._build_prompts(text, effective_prompt_src, tgt_lang, is_short_query)
 
         def ai_worker():
             local_stream = None
@@ -5192,7 +6013,7 @@ class LLMTranslateWindow(QMainWindow):
                                                 mismatch_banner, _ = self._build_mismatch_texts(src_mode, detected_lang_final)
                                                 self.sig.mismatchBannerShown.emit(current_task, mismatch_banner)
 
-                                live_clean = self._clean_output_text(chunk_accumulated, tgt_lang, src_text=text)
+                                live_clean = self._clean_output_text(chunk_accumulated, tgt_lang, src_text=text, is_streaming=True, expect_main_tag=is_dict_mode)
                                 if live_clean:
                                     full_preview = (completed_chunks_text + "\n\n" + live_clean).strip() if completed_chunks_text else live_clean
                                     self.sig.typewriterUpdated.emit(
@@ -5203,9 +6024,9 @@ class LLMTranslateWindow(QMainWindow):
                         if not chunk_accumulated:
                             raise
 
-                    cleaned_final = self._clean_output_text(chunk_accumulated, tgt_lang, src_text=text)
+                    cleaned_final = self._clean_output_text(chunk_accumulated, tgt_lang, src_text=text, is_streaming=False, expect_main_tag=is_dict_mode)
 
-                    if is_dict_mode and self._task_id == current_task and self._is_dict_output_broken(cleaned_final, plain_probe, tgt_lang):
+                    if is_short_query and self._task_id == current_task and self._is_dict_output_broken(cleaned_final, plain_probe, tgt_lang):
                         self.sig.statusAnimPhase.emit(self._tr("polishing"), "#a855f7")
                         retry_prompt = (
                             f"Translate \"{plain_probe}\" into {tgt_lang}. "
@@ -5219,12 +6040,13 @@ class LLMTranslateWindow(QMainWindow):
                             if not self._is_dict_output_broken(cand_retry, plain_probe, tgt_lang):
                                 cleaned_final = cand_retry
 
-                    if not is_dict_mode and not has_img and self._task_id == current_task:
+                    if not is_short_query and not has_img and self._task_id == current_task:
                         raw_chunk_src = re.sub(r"^.*?<source_text>\s*", "", payload, flags=re.DOTALL).replace("</source_text>", "").strip()
+                        parsed_main_chk, _ = self._parse_dict_response(cleaned_final, plain_probe)
                         unchanged_echo = (
-                            not cleaned_final
-                            or cleaned_final.strip().lower() == raw_chunk_src.strip().lower()
-                            or (tgt_lang in CYRILLIC_LANGUAGES and not RE_CYRILLIC_CHARS.search(cleaned_final) and len(raw_chunk_src) > 3)
+                            not parsed_main_chk
+                            or parsed_main_chk.strip().lower() == raw_chunk_src.strip().lower()
+                            or (tgt_lang in CYRILLIC_LANGUAGES and not RE_CYRILLIC_CHARS.search(parsed_main_chk) and len(raw_chunk_src) > 3)
                         )
                         if unchanged_echo:
                             self.sig.statusAnimPhase.emit(self._tr("polishing"), "#a855f7")
